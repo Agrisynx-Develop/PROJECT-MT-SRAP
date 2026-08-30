@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@media print {
+  /* Set exact background color printing */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* Define A4 page dimensions and print margins */
+  @page {
+    size: A4 portrait;
+    margin: 12mm 15mm 12mm 15mm;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide everything by default when printing */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Only show the report canvas area and its children */
+  #pdf-report-canvas,
+  #pdf-report-canvas * {
+    visibility: visible;
+  }
+
+  #pdf-report-canvas {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+  }
+
+  /* Avoid page breaks inside tables, signature blocks, and photos */
+  table, tr, td, th, .print-break-inside-avoid, .print-signature-block {
+    page-break-inside: avoid !important;
+  }
+
+  /* Hide print action buttons or interactive elements inside canvas if any */
+  .no-print {
+    display: none !important;
+  }
+}
