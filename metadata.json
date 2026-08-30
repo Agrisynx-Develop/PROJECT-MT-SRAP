@@ -1,0 +1,8 @@
+{
+  "name": "TDN Meat Tracker",
+  "description": "Sistem pelacakan thawing, pabrikasi daging, susut harian, dan closing multi-device terintegrasi Google Spreadsheet untuk Butcher dan MD Pusat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
