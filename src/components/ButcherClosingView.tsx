@@ -146,19 +146,20 @@ export default function ButcherClosingView({
       (s) => isPlanMatch(s.plannedFabrication, planObj.name)
     );
     const planAdj = adjustments.filter((a) => isPlanMatch(a.planName, planObj.name));
-    const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
-    const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
+    const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + (a.weightKg || 0), 0);
+    const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + (a.weightKg || 0), 0);
 
-    const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0)) || record.openingStockKg || 0;
-    const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0)) || record.newProcessedKg || 0;
+    const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) || (typeof record.openingStockKg === 'number' ? record.openingStockKg : 0);
+    const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0)) || (typeof record.newProcessedKg === 'number' ? record.newProcessedKg : 0);
     const totalTersedia = openingKg + processedKg + adjIn - adjOut;
     
     // Adaptive sales from segments or items
     const segmentSales = planSegments.reduce((sum, s) => sum + (s.salesKg || 0), 0);
     const itemSales = todayPlanItems.concat(carryoverPlanItems).reduce((sum, i) => sum + (i.salesKg || 0), 0);
-    const currentSales = Math.max(segmentSales, itemSales, record.salesKg || 0);
+    const currentSales = Math.max(segmentSales, itemSales, (typeof record.salesKg === 'number' ? record.salesKg : 0));
     const stokSistem = Math.max(0, totalTersedia - currentSales);
-    const susutJual = Math.max(0, stokSistem - record.actualClosingStockKg);
+    const actualClosing = typeof record.actualClosingStockKg === 'number' ? record.actualClosingStockKg : 0;
+    const susutJual = Math.max(0, stokSistem - actualClosing);
 
     setViewLockedPlan({
       plan: planObj,
@@ -360,17 +361,18 @@ export default function ButcherClosingView({
           const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
           const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
-          const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0)) || (existingRec ? existingRec.openingStockKg : 0);
-          const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0)) || (existingRec ? existingRec.newProcessedKg : 0);
+          const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) || (existingRec && typeof existingRec.openingStockKg === 'number' ? existingRec.openingStockKg : 0);
+          const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0)) || (existingRec && typeof existingRec.newProcessedKg === 'number' ? existingRec.newProcessedKg : 0);
           const totalTersedia = openingKg + processedKg + adjIn - adjOut;
 
           // Adaptive Sales (recalculates whenever segments change)
           const segmentSales = planSegments.reduce((sum, s) => sum + (s.salesKg || 0), 0);
-          const salesKg = segmentSales > 0 ? segmentSales : (existingRec ? existingRec.salesKg : 0);
+          const salesKg = segmentSales > 0 ? segmentSales : (existingRec && typeof existingRec.salesKg === 'number' ? existingRec.salesKg : 0);
           const stokSistem = Math.max(0, totalTersedia - salesKg);
 
           // Susut Jual = (Stok Sistem - Sisa Fisik)
-          const susutJualKg = existingRec ? Math.max(0, stokSistem - existingRec.actualClosingStockKg) : 0;
+          const existingActual = existingRec && typeof existingRec.actualClosingStockKg === 'number' ? existingRec.actualClosingStockKg : 0;
+          const susutJualKg = existingRec ? Math.max(0, stokSistem - existingActual) : 0;
 
           return (
             <div
@@ -410,15 +412,15 @@ export default function ButcherClosingView({
                 <div className="grid grid-cols-3 gap-1.5 bg-slate-50 p-2.5 rounded-xl text-xs border border-slate-100">
                   <div>
                     <span className="text-[10px] text-slate-500 block">Sisa Kemarin</span>
-                    <strong className="text-slate-800 font-mono text-xs">{openingKg.toFixed(2)} Kg</strong>
+                    <strong className="text-slate-800 font-mono text-xs">{(openingKg || 0).toFixed(2)} Kg</strong>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Diolah Baru</span>
-                    <strong className="text-red-700 font-mono text-xs">{processedKg.toFixed(2)} Kg</strong>
+                    <strong className="text-red-700 font-mono text-xs">{(processedKg || 0).toFixed(2)} Kg</strong>
                   </div>
                   <div>
                     <span className="text-[10px] text-emerald-700 font-bold block">Sales Real</span>
-                    <strong className="text-emerald-700 font-mono text-xs">{salesKg.toFixed(2)} Kg</strong>
+                    <strong className="text-emerald-700 font-mono text-xs">{(salesKg || 0).toFixed(2)} Kg</strong>
                   </div>
                 </div>
 
@@ -431,7 +433,7 @@ export default function ButcherClosingView({
                           ✓ Timbangan Fisik Closing (Sisa Real):
                         </span>
                         <span className="text-base font-black text-emerald-950 font-mono">
-                          {existingRec.actualClosingStockKg.toFixed(3)} Kg
+                          {(existingRec.actualClosingStockKg || 0).toFixed(3)} Kg
                         </span>
                       </div>
                       {existingRec.photoUrl && (
@@ -452,7 +454,7 @@ export default function ButcherClosingView({
                     <div className="pt-2 border-t border-emerald-200 flex items-center justify-between text-xs">
                       <span className="text-slate-600 font-medium">Susut Jual (Display):</span>
                       <span className="font-mono font-black text-amber-900 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
-                        {susutJualKg.toFixed(3)} Kg
+                        {(susutJualKg || 0).toFixed(3)} Kg
                       </span>
                     </div>
 
@@ -464,7 +466,7 @@ export default function ButcherClosingView({
                 ) : (
                   <div className="bg-slate-50 border border-dashed border-slate-300 p-2.5 rounded-xl flex items-center justify-between text-xs text-slate-500">
                     <span>Sisa Stok Sistem:</span>
-                    <strong className="text-blue-900 font-mono font-bold">{stokSistem.toFixed(2)} Kg</strong>
+                    <strong className="text-blue-900 font-mono font-bold">{(stokSistem || 0).toFixed(2)} Kg</strong>
                   </div>
                 )}
               </div>
@@ -530,10 +532,14 @@ export default function ButcherClosingView({
                 {records.map((r) => {
                   const matchingPlanObj = allUniquePlans.find((p) => isPlanMatch(p.name, r.planName));
                   const planSegs = segments.filter((s) => isPlanMatch(s.plannedFabrication, r.planName));
-                  const realSales = planSegs.reduce((sum, s) => sum + (s.salesKg || 0), 0) || r.salesKg;
-                  const totalTersedia = r.openingStockKg + r.newProcessedKg + (r.adjustInKg || 0) - (r.adjustOutKg || 0);
+                  const segSales = planSegs.reduce((sum, s) => sum + (s.salesKg || 0), 0);
+                  const realSales = segSales > 0 ? segSales : (typeof r.salesKg === 'number' ? r.salesKg : 0);
+                  const opening = typeof r.openingStockKg === 'number' ? r.openingStockKg : 0;
+                  const processed = typeof r.newProcessedKg === 'number' ? r.newProcessedKg : 0;
+                  const actualClosing = typeof r.actualClosingStockKg === 'number' ? r.actualClosingStockKg : 0;
+                  const totalTersedia = opening + processed + (r.adjustInKg || 0) - (r.adjustOutKg || 0);
                   const dynamicStokSistem = Math.max(0, totalTersedia - realSales);
-                  const dynamicSusut = Math.max(0, dynamicStokSistem - r.actualClosingStockKg);
+                  const dynamicSusut = Math.max(0, dynamicStokSistem - actualClosing);
 
                   return (
                     <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
@@ -541,12 +547,12 @@ export default function ButcherClosingView({
                         <span>{matchingPlanObj?.icon || '🥩'}</span>
                         <span>{r.planName}</span>
                       </td>
-                      <td className="p-3 text-right font-mono">{r.openingStockKg.toFixed(2)} Kg</td>
-                      <td className="p-3 text-right font-mono text-red-700">{r.newProcessedKg.toFixed(2)} Kg</td>
+                      <td className="p-3 text-right font-mono">{opening.toFixed(2)} Kg</td>
+                      <td className="p-3 text-right font-mono text-red-700">{processed.toFixed(2)} Kg</td>
                       <td className="p-3 text-right font-mono text-emerald-700 font-semibold">{realSales.toFixed(2)} Kg</td>
                       <td className="p-3 text-right font-mono text-blue-800 font-semibold">{dynamicStokSistem.toFixed(2)} Kg</td>
                       <td className="p-3 text-right font-mono font-black text-emerald-950 bg-emerald-50/40">
-                        {r.actualClosingStockKg.toFixed(3)} Kg
+                        {actualClosing.toFixed(3)} Kg
                       </td>
                       <td className="p-3 text-right font-mono font-bold text-amber-700">
                         {dynamicSusut.toFixed(3)} Kg
@@ -818,26 +824,26 @@ export default function ButcherClosingView({
               <div className="grid grid-cols-2 gap-3 border-b border-slate-200 pb-3">
                 <div>
                   <span className="text-slate-400 text-[10px] block font-semibold">Sisa Kemarin (Stok Awal):</span>
-                  <strong className="text-slate-800 font-mono text-sm">{viewLockedPlan.openingKg.toFixed(3)} Kg</strong>
+                  <strong className="text-slate-800 font-mono text-sm">{(viewLockedPlan.openingKg || 0).toFixed(3)} Kg</strong>
                 </div>
                 <div>
                   <span className="text-slate-400 text-[10px] block font-semibold">Diolah Baru Hari Ini:</span>
-                  <strong className="text-red-700 font-mono text-sm">{viewLockedPlan.processedKg.toFixed(3)} Kg</strong>
+                  <strong className="text-red-700 font-mono text-sm">{(viewLockedPlan.processedKg || 0).toFixed(3)} Kg</strong>
                 </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2 border-b border-slate-200 pb-3 text-[11px]">
                 <div>
                   <span className="text-slate-400 block">Total Tersedia:</span>
-                  <strong className="text-slate-800 font-mono">{viewLockedPlan.totalTersedia.toFixed(3)} Kg</strong>
+                  <strong className="text-slate-800 font-mono">{(viewLockedPlan.totalTersedia || 0).toFixed(3)} Kg</strong>
                 </div>
                 <div>
                   <span className="text-slate-400 block">Realisasi Sales:</span>
-                  <strong className="text-emerald-700 font-mono">{viewLockedPlan.currentSales.toFixed(3)} Kg</strong>
+                  <strong className="text-emerald-700 font-mono">{(viewLockedPlan.currentSales || 0).toFixed(3)} Kg</strong>
                 </div>
                 <div>
                   <span className="text-slate-400 block">Sisa Stok Sistem:</span>
-                  <strong className="text-blue-700 font-mono">{viewLockedPlan.stokSistem.toFixed(3)} Kg</strong>
+                  <strong className="text-blue-700 font-mono">{(viewLockedPlan.stokSistem || 0).toFixed(3)} Kg</strong>
                 </div>
               </div>
 
@@ -845,13 +851,13 @@ export default function ButcherClosingView({
                 <div>
                   <span className="text-[10px] text-emerald-800 font-bold block">Timbangan Sisa Fisik Akhir:</span>
                   <span className="text-base font-black text-emerald-950 font-mono">
-                    {viewLockedPlan.record.actualClosingStockKg.toFixed(3)} Kg
+                    {(viewLockedPlan.record.actualClosingStockKg || 0).toFixed(3)} Kg
                   </span>
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] text-amber-800 font-bold block">Susut Jual (Display):</span>
                   <span className="text-base font-black text-amber-900 font-mono">
-                    {viewLockedPlan.susutJual.toFixed(3)} Kg
+                    {(viewLockedPlan.susutJual || 0).toFixed(3)} Kg
                   </span>
                 </div>
               </div>
