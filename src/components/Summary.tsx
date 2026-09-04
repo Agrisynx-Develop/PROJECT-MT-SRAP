@@ -427,8 +427,11 @@ export default function Summary({
                 const matchingClosing = closingRecords.find(
                   (c) => isMatchPlan(c.planName, item.plannedFabrication || item.name)
                 );
-                const susutJualKg = matchingClosing ? matchingClosing.susutJualKg : itemSegments.reduce((sum, s) => sum + (s.periodicShrinkage || 0), 0);
-                const susutJualPct = item.weightBeforeThawing > 0 ? (susutJualKg / item.weightBeforeThawing) * 100 : 0;
+                const susutJualKg = (matchingClosing && typeof matchingClosing.susutJualKg === 'number' && !isNaN(matchingClosing.susutJualKg))
+                  ? matchingClosing.susutJualKg
+                  : itemSegments.reduce((sum, s) => sum + (s.periodicShrinkage || 0), 0);
+                const itemBAwal = item.weightBeforeThawing || 0;
+                const susutJualPct = itemBAwal > 0 ? (susutJualKg / itemBAwal) * 100 : 0;
 
                 const purpose = item.openingPurpose || 'UNTUK DISPLAY';
 
@@ -453,15 +456,15 @@ export default function Summary({
                         <span>{price}</span>
                       </div>
                     </td>
-                    <td className="p-4 font-medium">{item.weightBeforeThawing.toFixed(2)} Kg</td>
-                    <td className="p-4 font-medium">{item.weightAfterThawing ? `${item.weightAfterThawing.toFixed(2)} Kg` : '-'}</td>
+                    <td className="p-4 font-medium">{itemBAwal.toFixed(2)} Kg</td>
+                    <td className="p-4 font-medium">{typeof item.weightAfterThawing === 'number' ? `${item.weightAfterThawing.toFixed(2)} Kg` : '-'}</td>
                     <td className="p-4 font-mono font-bold text-rose-600">
-                      {processLossKg.toFixed(2)} Kg
-                      <span className="block text-[10px] font-normal text-rose-500">({processLossPct.toFixed(1)}%)</span>
+                      {(processLossKg || 0).toFixed(2)} Kg
+                      <span className="block text-[10px] font-normal text-rose-500">({(processLossPct || 0).toFixed(1)}%)</span>
                     </td>
                     <td className="p-4 font-mono font-bold text-amber-600">
-                      {susutJualKg.toFixed(2)} Kg
-                      <span className="block text-[10px] font-normal text-amber-500">({susutJualPct.toFixed(1)}%)</span>
+                      {(susutJualKg || 0).toFixed(2)} Kg
+                      <span className="block text-[10px] font-normal text-amber-500">({(susutJualPct || 0).toFixed(1)}%)</span>
                     </td>
                     <td className="p-4">
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
