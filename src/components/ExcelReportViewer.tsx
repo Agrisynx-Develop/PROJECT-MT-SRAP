@@ -210,7 +210,7 @@ export default function ExcelReportViewer({
   const dgFreshHasilModal = dgFreshHasil * dgFreshCogs;
   const dgFreshSusutProses = Math.max(0, dgFreshBahan - dgFreshHasil);
   const dgFreshClosing = closingRecords.find((c) => (c.planName || '').toLowerCase().includes('rdang') || (c.category || '').toUpperCase().includes('FRESH'));
-  const dgFreshSusutJual = dgFreshClosing ? dgFreshClosing.susutJualKg : 0;
+  const dgFreshSusutJual = dgFreshClosing && typeof dgFreshClosing.susutJualKg === 'number' && !isNaN(dgFreshClosing.susutJualKg) ? dgFreshClosing.susutJualKg : 0;
   const dgFreshTotalSusut = dgFreshSusutProses + dgFreshSusutJual;
   const dgFreshModalSusutJual = dgFreshHasil > 0 ? (dgFreshBahanModal + dgFreshSusutJual * dgFreshCogs) / dgFreshHasil : dgFreshCogs;
 
@@ -222,7 +222,7 @@ export default function ExcelReportViewer({
   const dgPremHasilModal = dgPremHasil * dgPremCogs;
   const dgPremSusutProses = Math.max(0, dgPremBahan - dgPremHasil);
   const dgPremClosing = closingRecords.find((c) => (c.planName || '').toLowerCase().includes('prem') || (c.category || '').toUpperCase().includes('PREMIUM'));
-  const dgPremSusutJual = dgPremClosing ? dgPremClosing.susutJualKg : 0;
+  const dgPremSusutJual = dgPremClosing && typeof dgPremClosing.susutJualKg === 'number' && !isNaN(dgPremClosing.susutJualKg) ? dgPremClosing.susutJualKg : 0;
   const dgPremTotalSusut = dgPremSusutProses + dgPremSusutJual;
   const dgPremModalSusutJual = dgPremHasil > 0 ? (dgPremBahanModal + dgPremSusutJual * dgPremCogs) / dgPremHasil : dgPremCogs;
 
@@ -234,7 +234,7 @@ export default function ExcelReportViewer({
   const rawonHasilModal = rawonHasil * rawonCogs;
   const rawonSusutProses = Math.max(0, rawonBahan - rawonHasil);
   const rawonClosing = closingRecords.find((c) => (c.planName || '').toLowerCase().includes('rawon') || (c.category || '').toUpperCase().includes('RAWON'));
-  const rawonSusutJual = rawonClosing ? rawonClosing.susutJualKg : 0;
+  const rawonSusutJual = rawonClosing && typeof rawonClosing.susutJualKg === 'number' && !isNaN(rawonClosing.susutJualKg) ? rawonClosing.susutJualKg : 0;
   const rawonTotalSusut = rawonSusutProses + rawonSusutJual;
   const rawonModalSusutJual = rawonHasil > 0 ? (rawonBahanModal + rawonSusutJual * rawonCogs) / rawonHasil : rawonCogs;
 
@@ -246,7 +246,7 @@ export default function ExcelReportViewer({
   const shankHasilModal = shankHasil * shankCogs;
   const shankSusutProses = Math.max(0, shankBahan - shankHasil);
   const shankClosing = closingRecords.find((c) => (c.planName || '').toLowerCase().includes('shank') || (c.category || '').toUpperCase().includes('SHANK'));
-  const shankSusutJual = shankClosing ? shankClosing.susutJualKg : 0;
+  const shankSusutJual = shankClosing && typeof shankClosing.susutJualKg === 'number' && !isNaN(shankClosing.susutJualKg) ? shankClosing.susutJualKg : 0;
   const shankTotalSusut = shankSusutProses + shankSusutJual;
   const shankModalSusutJual = shankHasil > 0 ? (shankBahanModal + shankSusutJual * shankCogs) / shankHasil : shankCogs;
 
