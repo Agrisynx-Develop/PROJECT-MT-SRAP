@@ -341,7 +341,7 @@ export default function UpdateSales({
                 <option value="">-- Ketuk Untuk Pilih Rencana Potong --</option>
                 {planSalesGroups.map((group) => (
                   <option key={group.planName} value={group.planName}>
-                    {group.planName} ➔ Tersedia: {group.stockAwalKg.toFixed(2)} Kg | Sales: {group.totalSalesKg.toFixed(2)} Kg | Stok Sistem: {group.stokSistemKg.toFixed(2)} Kg {group.isClosed ? `| Fisik: ${group.actualPhysicalStockKg?.toFixed(2)} Kg` : ''}
+                    {group.planName} ➔ Tersedia: {group.stockAwalKg.toFixed(2)} Kg | Sales: {group.totalSalesKg.toFixed(2)} Kg | Stok Sistem: {group.stokSistemKg.toFixed(2)} Kg {group.isClosed && typeof group.actualPhysicalStockKg === 'number' ? `| Fisik: ${group.actualPhysicalStockKg.toFixed(2)} Kg` : ''}
                   </option>
                 ))}
               </select>
@@ -393,7 +393,7 @@ export default function UpdateSales({
                   <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
                     <span className="text-slate-600 block text-[10px] font-bold uppercase">Sisa Fisik Real</span>
                     <span className="text-xs font-black text-slate-900 block mt-0.5">
-                      {selectedGroup.isClosed && selectedGroup.actualPhysicalStockKg !== undefined
+                      {selectedGroup.isClosed && typeof selectedGroup.actualPhysicalStockKg === 'number'
                         ? `${selectedGroup.actualPhysicalStockKg.toFixed(2)} Kg`
                         : '-'}
                     </span>
@@ -440,7 +440,7 @@ export default function UpdateSales({
                   type="number"
                   step="0.001"
                   placeholder={
-                    selectedGroup?.isClosed && selectedGroup.actualPhysicalStockKg !== undefined
+                    selectedGroup?.isClosed && typeof selectedGroup.actualPhysicalStockKg === 'number'
                       ? `Timbangan fisik saat ini: ${selectedGroup.actualPhysicalStockKg.toFixed(2)} Kg (isi jika ingin mengubah)`
                       : 'Isi jika ingin mencatat/memperbarui timbangan fisik sisa display'
                   }
@@ -570,7 +570,7 @@ export default function UpdateSales({
                       {group.stokSistemKg.toFixed(2)}
                     </td>
                     <td className="py-3.5 px-4 text-right font-mono font-black text-indigo-900">
-                      {group.isClosed && group.actualPhysicalStockKg !== undefined ? (
+                      {group.isClosed && typeof group.actualPhysicalStockKg === 'number' ? (
                         <span className="bg-indigo-50 text-indigo-900 px-2 py-0.5 rounded border border-indigo-200">
                           {group.actualPhysicalStockKg.toFixed(2)}
                         </span>
