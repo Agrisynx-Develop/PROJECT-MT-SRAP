@@ -809,13 +809,13 @@ export default function AdminTokoView({
                     <tr key={rec.id} className="hover:bg-slate-50">
                       <td className="p-3 font-bold text-slate-900">{rec.planName}</td>
                       <td className="p-3 text-slate-600">{rec.category}</td>
-                      <td className="p-3 text-right font-mono">{rec.openingStockKg.toFixed(3)}</td>
-                      <td className="p-3 text-right font-mono">{rec.newProcessedKg.toFixed(3)}</td>
-                      <td className="p-3 text-right font-mono text-emerald-700">{rec.salesKg.toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono">{(rec.openingStockKg || 0).toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono">{(rec.newProcessedKg || 0).toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono text-emerald-700">{(rec.salesKg || 0).toFixed(3)}</td>
                       <td className="p-3 text-right font-mono font-black text-blue-900 bg-blue-50/60">
-                        {rec.actualClosingStockKg.toFixed(3)} Kg
+                        {(rec.actualClosingStockKg || 0).toFixed(3)} Kg
                       </td>
-                      <td className="p-3 text-right font-mono text-red-700 font-bold">{rec.susutJualKg.toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono text-red-700 font-bold">{(rec.susutJualKg || 0).toFixed(3)}</td>
                       <td className="p-3 text-center">
                         {rec.photoUrl ? (
                           <a
