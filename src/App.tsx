@@ -44,7 +44,7 @@ import {
   updateTableInSheets,
   pushAllDataToSheets,
 } from './utils/sheetsApi';
-import { matchStoreEntity, getEffectiveStore, isMatchPlan } from './utils/storeHelper';
+import { matchStoreEntity, getEffectiveStore, isMatchPlan, getDeterministicClosingRecordId } from './utils/storeHelper';
 
 // Auth Screen
 import LoginScreen from './components/LoginScreen';
@@ -178,7 +178,51 @@ export default function App() {
           if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
           if (d.thawingItems) setItems(d.thawingItems);
           if (d.fabricationSegments) setSegments(d.fabricationSegments);
-          if (d.closingPlanRecords) setClosingRecords(d.closingPlanRecords);
+          if (d.closingPlanRecords) {
+            const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
+            const sanitized: ClosingPlanRecord[] = rawRecords.map((r: any) => ({
+              ...r,
+              openingStockKg: Number(r.openingStockKg) || 0,
+              newProcessedKg: Number(r.newProcessedKg) || 0,
+              adjustInKg: Number(r.adjustInKg) || 0,
+              adjustOutKg: Number(r.adjustOutKg) || 0,
+              salesKg: Number(r.salesKg) || 0,
+              closingStockBySystemKg: Number(r.closingStockBySystemKg) || 0,
+              actualClosingStockKg: Number(r.actualClosingStockKg) || 0,
+              susutJualKg: Number(r.susutJualKg) || 0,
+            }));
+
+            // Merge with local records if local has newer closed timestamp or non-zero weight
+            const local = getClosingPlanRecords();
+            const localList = Array.isArray(local) ? local : [];
+            const merged: ClosingPlanRecord[] = [...sanitized];
+
+            localList.forEach((loc) => {
+              const idx = merged.findIndex(
+                (s) =>
+                  s.id === loc.id ||
+                  (matchStoreEntity(s.storeId, { id: loc.storeId }) &&
+                    isMatchPlan(s.planName, loc.planName) &&
+                    (s.date === loc.date || !s.date || !loc.date))
+              );
+              if (idx < 0) {
+                merged.push(loc);
+              } else {
+                const locActual = Number(loc.actualClosingStockKg) || 0;
+                const srvActual = Number(merged[idx].actualClosingStockKg) || 0;
+                if (locActual > 0 && srvActual === 0) {
+                  merged[idx] = { ...merged[idx], ...loc };
+                } else if (new Date(loc.timestamp || 0).getTime() > new Date(merged[idx].timestamp || 0).getTime()) {
+                  merged[idx] = { ...merged[idx], ...loc };
+                }
+              }
+            });
+
+            setClosingRecords(merged);
+            if (merged.length > 0) {
+              saveClosingPlanRecords(merged);
+            }
+          }
           if (d.dailyClosingReports) setReports(d.dailyClosingReports);
           if (d.stockAdjustments) setAdjustments(d.stockAdjustments);
           if (d.lossConfig) setLossConfig(d.lossConfig);
@@ -343,17 +387,60 @@ export default function App() {
     // 2. Fetch initial data on mount (without touching activeTab)
     fetchAllData(true);
 
-    // 3. Gentle sync on tab return / window focus (NEVER resets activeTab)
-    const handleFocus = () => {
-      if (getGoogleAppsScriptUrl()) {
+    // 3. Periodic gentle background polling (every 12s if tab is visible) to auto-sync closing and sales across roles
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
         fetchAllData(true);
       }
+    }, 12000);
+
+    // 4. Gentle sync on tab return / window focus (NEVER resets activeTab)
+    const handleFocus = () => {
+      fetchAllData(true);
     };
 
     window.addEventListener('focus', handleFocus);
 
+    // 5. Cross-tab instant communication via BroadcastChannel
+    let bc: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        bc = new BroadcastChannel('tdn_meat_tracker_channel');
+        bc.onmessage = (event) => {
+          if (event.data?.type === 'CLOSING_RECORD_SAVED' && event.data.record) {
+            const incoming: ClosingPlanRecord = event.data.record;
+            setClosingRecords((prev) => {
+              const existingIdx = prev.findIndex(
+                (r) =>
+                  r.id === incoming.id ||
+                  (matchStoreEntity(r.storeId, { id: incoming.storeId }) &&
+                    isMatchPlan(r.planName, incoming.planName) &&
+                    (r.date === incoming.date || !r.date || !incoming.date))
+              );
+              if (existingIdx >= 0) {
+                const next = [...prev];
+                next[existingIdx] = incoming;
+                return next;
+              }
+              return [incoming, ...prev];
+            });
+          }
+        };
+      } catch (e) {
+        console.warn('BroadcastChannel setup error:', e);
+      }
+    }
+
     return () => {
+      clearInterval(pollInterval);
       window.removeEventListener('focus', handleFocus);
+      if (bc) {
+        try {
+          bc.close();
+        } catch {
+          // ignore
+        }
+      }
     };
   }, []);
 
@@ -789,16 +876,19 @@ export default function App() {
   };
 
   // Handler: Save Closing Plan Record (Physical Closing)
-  const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'>) => {
+  const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string }) => {
+    const recId = record.id || getDeterministicClosingRecordId(record.storeId, record.planName, record.date);
     const newRec: ClosingPlanRecord = {
       ...record,
-      id: `cpr_${Date.now()}`,
+      id: recId,
       timestamp: new Date().toISOString(),
     };
     const existingIdx = closingRecords.findIndex(
       (r) =>
-        matchStoreEntity(r.storeId, { id: newRec.storeId }) &&
-        isMatchPlan(r.planName, newRec.planName)
+        r.id === newRec.id ||
+        (matchStoreEntity(r.storeId, { id: newRec.storeId }) &&
+          isMatchPlan(r.planName, newRec.planName) &&
+          (r.date === newRec.date || !r.date || !newRec.date))
     );
     let updated: ClosingPlanRecord[];
     if (existingIdx >= 0) {
@@ -816,6 +906,22 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newRec)
     }).catch(console.error);
+
+    // Cross-tab broadcast for instant multi-device/multi-window synchronization
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const bc = new BroadcastChannel('tdn_meat_tracker_channel');
+        bc.postMessage({ type: 'CLOSING_RECORD_SAVED', record: newRec });
+        bc.close();
+      } catch (err) {
+        console.warn('BroadcastChannel sync error:', err);
+      }
+    }
+
+    // Trigger subtle cloud refresh to verify cloud alignment
+    setTimeout(() => {
+      fetchAllData(true);
+    }, 1800);
   };
 
   // Handler: Transfer Purpose (Pesanan <-> Display)
@@ -1239,7 +1345,7 @@ export default function App() {
       label: 'Closing Rencana Potong',
       icon: CheckSquare,
       color: 'text-rose-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'sales',
@@ -1661,12 +1767,18 @@ export default function App() {
             <ButcherClosingView
               currentUser={currentUser}
               currentStore={currentStore}
+              stores={stores}
+              selectedStoreIdForMd={selectedStoreIdForMd}
+              onSelectStoreForMd={setSelectedStoreIdForMd}
               segments={storeSegments}
               items={storeItems}
               adjustments={storeAdjustments}
               onSaveClosingRecord={handleSaveClosingRecord}
               existingClosingRecords={storeClosingRecords}
               onDailyResetAndCarryover={handleDailyResetAndCarryover}
+              onManualSync={() => fetchAllData(false)}
+              isSyncing={isCloudSyncing}
+              lastSyncTime={lastCloudSync}
             />
           )}
 
