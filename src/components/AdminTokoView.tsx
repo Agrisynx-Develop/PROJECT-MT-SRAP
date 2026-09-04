@@ -789,7 +789,10 @@ export default function AdminTokoView({
               </span>
             </div>
 
-            <div className="overflow-x-auto">
+            {(() => {
+              const displayClosing = currentStoreClosing.length > 0 ? currentStoreClosing : closingRecords;
+              return (
+                <div className="overflow-x-auto">
               <table className="w-full text-xs text-left">
                 <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
                   <tr>
@@ -805,17 +808,17 @@ export default function AdminTokoView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {closingRecords.map((rec) => (
+                  {displayClosing.map((rec) => (
                     <tr key={rec.id} className="hover:bg-slate-50">
                       <td className="p-3 font-bold text-slate-900">{rec.planName}</td>
                       <td className="p-3 text-slate-600">{rec.category}</td>
-                      <td className="p-3 text-right font-mono">{(rec.openingStockKg || 0).toFixed(3)}</td>
-                      <td className="p-3 text-right font-mono">{(rec.newProcessedKg || 0).toFixed(3)}</td>
-                      <td className="p-3 text-right font-mono text-emerald-700">{(rec.salesKg || 0).toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono">{(Number(rec.openingStockKg) || 0).toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono">{(Number(rec.newProcessedKg) || 0).toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono text-emerald-700">{(Number(rec.salesKg) || 0).toFixed(3)}</td>
                       <td className="p-3 text-right font-mono font-black text-blue-900 bg-blue-50/60">
-                        {(rec.actualClosingStockKg || 0).toFixed(3)} Kg
+                        {(Number(rec.actualClosingStockKg) || 0).toFixed(3)} Kg
                       </td>
-                      <td className="p-3 text-right font-mono text-red-700 font-bold">{(rec.susutJualKg || 0).toFixed(3)}</td>
+                      <td className="p-3 text-right font-mono text-red-700 font-bold">{(Number(rec.susutJualKg) || 0).toFixed(3)}</td>
                       <td className="p-3 text-center">
                         {rec.photoUrl ? (
                           <a
@@ -836,6 +839,8 @@ export default function AdminTokoView({
                 </tbody>
               </table>
             </div>
+              );
+            })()}
           </div>
         </div>
       )}
