@@ -113,3 +113,19 @@ export function isMatchPlan(a?: string, b?: string): boolean {
   return false;
 }
 
+/**
+ * Generates a deterministic and synchronized ID for a ClosingPlanRecord
+ * ensuring that Butcher, MD, and Admin devices all reference and update the exact same record
+ * without generating mismatched random IDs.
+ */
+export function getDeterministicClosingRecordId(
+  storeId?: string,
+  planName?: string,
+  date?: string
+): string {
+  const cleanStore = String(storeId || '1').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const cleanPlan = normalizePlanName(planName || 'general');
+  const cleanDate = (date || new Date().toISOString().split('T')[0]).replace(/[^0-9\-]/g, '');
+  return `cpr_${cleanStore}_${cleanPlan}_${cleanDate}`;
+}
+
