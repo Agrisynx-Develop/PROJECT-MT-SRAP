@@ -350,7 +350,7 @@ function readTableData(ss, sheetName) {
       }
     }
 
-    if (item.id || item.code || item.username || item.name || item.itemCode) {
+    if (item.id || item.code || item.username || item.name || item.itemCode || item.planName) {
       rows.push(item);
     }
   }
@@ -403,6 +403,8 @@ function writeTableData(ss, sheetName, items, customHeaders) {
         val = '';
       } else if (typeof val === 'boolean') {
         val = val ? 'YA' : 'TIDAK';
+      } else if (typeof val === 'string' && val.length > 48000) {
+        val = val.substring(0, 48000);
       }
       row.push(val);
     }
@@ -421,7 +423,7 @@ function writeTableData(ss, sheetName, items, customHeaders) {
  * Atomic Upsert of a single record by ID without replacing the whole sheet
  */
 function upsertSingleRecord(ss, sheetName, record) {
-  if (!record || !record.id) return { operation: 'skipped', error: 'No ID' };
+  if (!record || (!record.id && !record.planName)) return { operation: 'skipped', error: 'No ID or PlanName' };
   var sheet = getOrCreateSheet(ss, sheetName);
   var headers = TABLE_SCHEMAS[sheetName] || Object.keys(record);
 
@@ -429,11 +431,24 @@ function upsertSingleRecord(ss, sheetName, record) {
   var values = lastRow > 1 ? sheet.getRange(1, 1, lastRow, headers.length).getValues() : [headers];
   var idColIdx = headers.indexOf('id');
   if (idColIdx === -1) idColIdx = 0;
+  var storeColIdx = headers.indexOf('storeId');
+  var planColIdx = headers.indexOf('planName');
+  var dateColIdx = headers.indexOf('date');
 
   var rowIndexToUpdate = -1;
   for (var r = 1; r < values.length; r++) {
-    if (String(values[r][idColIdx]) === String(record.id)) {
+    var rowId = String(values[r][idColIdx] || '');
+    var rowStore = storeColIdx >= 0 ? String(values[r][storeColIdx] || '') : '';
+    var rowPlan = planColIdx >= 0 ? String(values[r][planColIdx] || '') : '';
+    var rowDate = dateColIdx >= 0 ? String(values[r][dateColIdx] || '') : '';
+
+    if (record.id && rowId === String(record.id)) {
       rowIndexToUpdate = r + 1; // 1-based index
+      break;
+    }
+    // For Closing_Fisik, also match by store + plan + date
+    if (sheetName === 'Closing_Fisik' && record.planName && rowStore === String(record.storeId) && rowPlan.toLowerCase() === String(record.planName).toLowerCase() && (!record.date || !rowDate || rowDate === String(record.date))) {
+      rowIndexToUpdate = r + 1;
       break;
     }
   }
@@ -445,6 +460,8 @@ function upsertSingleRecord(ss, sheetName, record) {
       val = '';
     } else if (typeof val === 'boolean') {
       val = val ? 'YA' : 'TIDAK';
+    } else if (typeof val === 'string' && val.length > 48000) {
+      val = val.substring(0, 48000);
     }
     rowData.push(val);
   }
