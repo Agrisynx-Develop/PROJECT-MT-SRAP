@@ -768,7 +768,7 @@ export default function RiwayatHarian({
                               const matchingPlanClosing = closingRecords?.find(
                                 (c) => isPlanMatch(c.planName, planName)
                               );
-                              const susutJual = matchingPlanClosing
+                              const susutJual = (matchingPlanClosing && typeof matchingPlanClosing.susutJualKg === 'number' && !isNaN(matchingPlanClosing.susutJualKg))
                                 ? matchingPlanClosing.susutJualKg
                                 : planItems.reduce((acc, i) => acc + (i.susutJualKg || 0), 0);
                               const totalSusutKg = Math.max(0, totalSebelum - totalSetelah) + Math.abs(susutJual);
