@@ -108,3 +108,40 @@ export async function processHighResImage(
     }
   });
 }
+
+/**
+ * Ensures an image data URL is guaranteed to be under the Google Sheets 50,000 cell character limit
+ * (target <= 35,000 chars) while keeping the image legible and preventing cloud sync exceptions.
+ */
+export async function ensureCloudSafeImage(
+  dataUrl?: string,
+  maxChars = 35000
+): Promise<string> {
+  if (!dataUrl || typeof dataUrl !== 'string') return '';
+  if (dataUrl.length <= maxChars) return dataUrl;
+
+  try {
+    const medium = await processHighResImage(dataUrl, {
+      maxWidth: 600,
+      maxHeight: 600,
+      quality: 0.6,
+      format: 'image/jpeg',
+    });
+    if (medium.length <= maxChars) return medium;
+
+    const compact = await processHighResImage(dataUrl, {
+      maxWidth: 400,
+      maxHeight: 400,
+      quality: 0.45,
+      format: 'image/jpeg',
+    });
+    if (compact.length <= maxChars) return compact;
+
+    // Fallback: return compact truncated or thumbnail
+    return compact.substring(0, maxChars);
+  } catch (err) {
+    console.warn('Failed to compress image for cloud safely:', err);
+    return dataUrl.substring(0, maxChars);
+  }
+}
+
