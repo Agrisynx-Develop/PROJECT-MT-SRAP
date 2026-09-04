@@ -9,6 +9,7 @@ import {
   DailyClosingReport,
   LossAlertConfig
 } from '../types';
+import { ensureCloudSafeImage } from './imageCompressor';
 
 export interface AllSheetsData {
   stores: Store[];
@@ -257,10 +258,19 @@ export async function postToSheets(payload: any): Promise<boolean> {
  * Atomic Upsert single record (Prevents HP and Laptop from overwriting entire sheet!)
  */
 export async function upsertRecordToSheets(table: string, record: any): Promise<boolean> {
+  const normTable = normalizeSheetTableName(table);
+  let safeRecord = record;
+  if (record && typeof record === 'object') {
+    safeRecord = { ...record };
+    if (safeRecord.photoUrl && typeof safeRecord.photoUrl === 'string' && safeRecord.photoUrl.length > 35000) {
+      safeRecord.photoUrl = await ensureCloudSafeImage(safeRecord.photoUrl, 35000);
+    }
+  }
+
   return postToSheets({
     action: 'upsertRecord',
-    table: normalizeSheetTableName(table),
-    record,
+    table: normTable,
+    record: safeRecord,
     timestamp: new Date().toISOString()
   });
 }
@@ -281,10 +291,22 @@ export async function deleteRecordFromSheets(table: string, recordId: string): P
  * Push full table (e.g. For bulk reorder or complete updates)
  */
 export async function updateTableInSheets(table: string, items: any[]): Promise<boolean> {
+  const safeItems = await Promise.all(
+    (items || []).map(async (item) => {
+      if (item && typeof item === 'object' && item.photoUrl && typeof item.photoUrl === 'string' && item.photoUrl.length > 35000) {
+        return {
+          ...item,
+          photoUrl: await ensureCloudSafeImage(item.photoUrl, 35000),
+        };
+      }
+      return item;
+    })
+  );
+
   return postToSheets({
     action: 'updateTable',
     table: normalizeSheetTableName(table),
-    items,
+    items: safeItems,
     timestamp: new Date().toISOString()
   });
 }
