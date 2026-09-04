@@ -1030,8 +1030,8 @@ export default function MdHelicopterView({
         );
         const totalSusutProsesStore = Math.max(0, totalBahanStore - totalHasilStore);
         const totalSusutJualStore = drillClosing.reduce(
-          (sum, r) => sum + (r.susutJualKg || 0),
-          drillTodayItems.reduce((sum, i) => sum + (i.susutJualKg || 0), 0)
+          (sum, r) => sum + (Number(r.susutJualKg) || 0),
+          drillTodayItems.reduce((sum, i) => sum + (Number(i.susutJualKg) || 0), 0)
         );
 
         return (
@@ -1144,14 +1144,14 @@ export default function MdHelicopterView({
                         0
                       );
                       const sales = rec
-                        ? (typeof rec.salesKg === 'number' && !isNaN(rec.salesKg) ? rec.salesKg : 0)
-                        : planSegs.reduce((sum, s) => sum + (s.salesKg || 0), 0);
+                        ? (Number(rec.salesKg) || 0)
+                        : planSegs.reduce((sum, s) => sum + (Number(s.salesKg) || 0), 0);
                       const stokSistem = Math.max(0, stockAwal + hasilPotong - sales);
                       const stokReal = rec
-                        ? (typeof rec.actualClosingStockKg === 'number' && !isNaN(rec.actualClosingStockKg) ? rec.actualClosingStockKg : 0)
-                        : planSegs.reduce((sum, s) => sum + (s.actualWeight || 0), 0);
+                        ? (Number(rec.actualClosingStockKg) || 0)
+                        : planSegs.reduce((sum, s) => sum + (Number(s.actualWeight) || 0), 0);
                       const susutJual = rec
-                        ? (typeof rec.susutJualKg === 'number' && !isNaN(rec.susutJualKg) ? rec.susutJualKg : 0)
+                        ? (Number(rec.susutJualKg) || 0)
                         : (bahanDiolah > 0 || sales > 0 ? Math.max(0, stokSistem - stokReal) : 0);
 
                       return (
