@@ -7,7 +7,7 @@ import {
   UserAccount,
   Store
 } from '../types';
-import { processHighResImage } from '../utils/imageCompressor';
+import { processHighResImage, ensureCloudSafeImage } from '../utils/imageCompressor';
 import { isMatchPlan } from '../utils/storeHelper';
 import {
   CheckSquare,
@@ -27,24 +27,34 @@ import {
   X,
   Info,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  Building2
 } from 'lucide-react';
 
 interface ButcherClosingViewProps {
   currentUser: UserAccount;
   currentStore?: Store;
+  stores?: Store[];
+  selectedStoreIdForMd?: string;
+  onSelectStoreForMd?: (id: string) => void;
   items: ThawingItem[];
   segments: FabricationSegment[];
   adjustments?: StockAdjustment[];
   closingRecords?: ClosingPlanRecord[];
   existingClosingRecords?: ClosingPlanRecord[];
-  onSaveClosingRecord: (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'>) => void;
+  onSaveClosingRecord: (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string }) => void;
   onDailyResetAndCarryover?: () => void;
+  onManualSync?: () => void;
+  isSyncing?: boolean;
+  lastSyncTime?: string | null;
 }
 
 export default function ButcherClosingView({
   currentUser,
   currentStore,
+  stores = [],
+  selectedStoreIdForMd,
+  onSelectStoreForMd,
   items,
   segments,
   adjustments = [],
@@ -52,6 +62,9 @@ export default function ButcherClosingView({
   existingClosingRecords,
   onSaveClosingRecord,
   onDailyResetAndCarryover,
+  onManualSync,
+  isSyncing = false,
+  lastSyncTime = null,
 }: ButcherClosingViewProps) {
   const records = existingClosingRecords ?? closingRecords ?? [];
   
@@ -198,7 +211,7 @@ export default function ButcherClosingView({
   };
 
   // Handle Submit Closing
-  const handleSubmitClosing = (e: React.FormEvent) => {
+  const handleSubmitClosing = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan) return;
 
@@ -232,10 +245,10 @@ export default function ButcherClosingView({
     const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
     const existingRec = records.find((r) => isPlanMatch(r.planName, selectedPlan.name));
-    const openingStockKg = (carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0)) || (existingRec ? existingRec.openingStockKg : 0);
-    const newProcessedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0)) || (existingRec ? existingRec.newProcessedKg : 0);
+    const openingStockKg = (carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0)) || (existingRec ? (Number(existingRec.openingStockKg) || 0) : 0);
+    const newProcessedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0)) || (existingRec ? (Number(existingRec.newProcessedKg) || 0) : 0);
     const itemSales = todayPlanItems.concat(carryoverPlanItems).reduce((sum, i) => sum + (i.salesKg || 0), 0);
-    const calculatedSales = Math.max(segmentSales, itemSales, (existingRec ? existingRec.salesKg : 0));
+    const calculatedSales = Math.max(segmentSales, itemSales, (existingRec ? (Number(existingRec.salesKg) || 0) : 0));
     const totalTersedia = openingStockKg + newProcessedKg + adjIn - adjOut;
     const closingBySystem = Math.max(0, totalTersedia - calculatedSales);
     const susutJualKg = Math.max(0, closingBySystem - actualStock);
@@ -245,9 +258,16 @@ export default function ButcherClosingView({
     // Sanitize note
     const sanitizedNote = closingNote.replace(/[<>]/g, '').trim();
 
+    // Ensure photo size is safe for cloud sync
+    let safePhoto = closingPhoto;
+    if (closingPhoto && closingPhoto.length > 35000) {
+      safePhoto = await ensureCloudSafeImage(closingPhoto, 35000);
+    }
+
     onSaveClosingRecord({
+      id: existingRec?.id,
       storeId: effectiveStoreId,
-      date: new Date().toISOString().split('T')[0],
+      date: existingRec?.date || new Date().toISOString().split('T')[0],
       planName: selectedPlan.name,
       category: selectedPlan.category,
       openingStockKg: parseFloat(openingStockKg.toFixed(3)),
@@ -258,10 +278,10 @@ export default function ButcherClosingView({
       closingStockBySystemKg: parseFloat(closingBySystem.toFixed(3)),
       actualClosingStockKg: parseFloat(actualStock.toFixed(3)),
       susutJualKg: parseFloat(susutJualKg.toFixed(3)),
-      photoUrl: closingPhoto,
+      photoUrl: safePhoto,
       photoCaption: `Foto Timbangan Closing: ${selectedPlan.name}`,
       note: sanitizedNote,
-      butcherName: currentUser.fullName,
+      butcherName: currentUser.fullName || currentUser.username,
     });
 
     setSuccessMsg(`✓ Status rencana "${selectedPlan.name}" kini SUDAH CLOSING (Terlock). Timbangan fisik ${actualStock.toFixed(3)} Kg disimpan & terintegrasi sebagai calon Stok Awal besok!`);
@@ -284,15 +304,48 @@ export default function ButcherClosingView({
 
   return (
     <div className="space-y-6">
+      {/* MD Multi-Store Selector Bar (if user is MD) */}
+      {currentUser.role === 'md' && stores && stores.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 p-3.5 rounded-2xl flex items-center justify-between gap-3 flex-wrap shadow-sm">
+          <div className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-bold text-slate-200">Pilih Toko Cabang (MD Multi-Store Closing Monitor):</span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {stores.map((s) => {
+              const isSelected = (currentStore?.id === s.id) || (selectedStoreIdForMd === s.id);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onSelectStoreForMd && onSelectStoreForMd(s.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                    isSelected
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  {s.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Title & Instructions Header */}
       <div className="bg-gradient-to-r from-red-900 via-red-800 to-slate-900 text-white rounded-2xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-red-700/80 text-red-100 border border-red-500/30">
               Menu Closing Butcher
             </span>
-            <span className="text-xs text-red-200">
+            <span className="text-xs text-red-200 font-semibold">
               {currentStore?.name || 'TDN Cikarang Utara'}
+            </span>
+            <span className="text-[10px] bg-slate-800/80 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
+              Role: <strong className="text-white uppercase">{currentUser.role}</strong> ({currentUser.fullName || currentUser.username})
             </span>
           </div>
           <h1 className="text-2xl font-black mt-1 flex items-center gap-2">
@@ -300,11 +353,29 @@ export default function ButcherClosingView({
             Closing Fisik Per Rencana Potong
           </h1>
           <p className="text-xs text-red-200 mt-1">
-            Timbang sisa fisik di chiller/display. Data yang sudah diinput akan berubah menjadi <strong>Sudah Closing (Terlock)</strong>, permanen tidak kembali lagi, dan sisa fisiknya terintegrasi sebagai <strong>Stok Awal (Sisa Kemarin)</strong> besok.
+            Timbang sisa fisik di chiller/display. Data tersinkron otomatis secara real-time ke akun Butcher, Admin Toko, dan MD. Sisa fisiknya terintegrasi sebagai <strong>Stok Awal (Sisa Kemarin)</strong> hari berikutnya.
           </p>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0 flex-wrap">
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          {/* Cloud Synchronization Button */}
+          {onManualSync && (
+            <button
+              type="button"
+              onClick={onManualSync}
+              disabled={isSyncing}
+              className={`px-3.5 py-3 rounded-xl text-xs font-extrabold transition flex items-center gap-2 cursor-pointer border shadow-xs ${
+                isSyncing
+                  ? 'bg-blue-950/80 border-blue-500 text-blue-200 cursor-wait'
+                  : 'bg-slate-900/90 hover:bg-slate-800 text-white border-slate-700 active:scale-95'
+              }`}
+              title="Sinkronkan & tarik closing terbaru langsung dari Cloud / Google Spreadsheet"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin text-blue-400' : 'text-emerald-400'}`} />
+              <span>{isSyncing ? 'Sinkronisasi Cloud...' : 'Sinkronkan Cloud'}</span>
+            </button>
+          )}
+
           <div className={`p-3 rounded-xl flex items-center gap-3 border ${
             isAllClosed
               ? 'bg-emerald-950/90 border-emerald-600 text-emerald-100 shadow-sm'
@@ -361,17 +432,17 @@ export default function ButcherClosingView({
           const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
           const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
-          const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) || (existingRec && typeof existingRec.openingStockKg === 'number' ? existingRec.openingStockKg : 0);
-          const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0)) || (existingRec && typeof existingRec.newProcessedKg === 'number' ? existingRec.newProcessedKg : 0);
+          const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) || (existingRec ? (Number(existingRec.openingStockKg) || 0) : 0);
+          const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0)) || (existingRec ? (Number(existingRec.newProcessedKg) || 0) : 0);
           const totalTersedia = openingKg + processedKg + adjIn - adjOut;
 
           // Adaptive Sales (recalculates whenever segments change)
           const segmentSales = planSegments.reduce((sum, s) => sum + (s.salesKg || 0), 0);
-          const salesKg = segmentSales > 0 ? segmentSales : (existingRec && typeof existingRec.salesKg === 'number' ? existingRec.salesKg : 0);
+          const salesKg = segmentSales > 0 ? segmentSales : (existingRec ? (Number(existingRec.salesKg) || 0) : 0);
           const stokSistem = Math.max(0, totalTersedia - salesKg);
 
           // Susut Jual = (Stok Sistem - Sisa Fisik)
-          const existingActual = existingRec && typeof existingRec.actualClosingStockKg === 'number' ? existingRec.actualClosingStockKg : 0;
+          const existingActual = existingRec ? (Number(existingRec.actualClosingStockKg) || 0) : 0;
           const susutJualKg = existingRec ? Math.max(0, stokSistem - existingActual) : 0;
 
           return (
@@ -433,7 +504,7 @@ export default function ButcherClosingView({
                           ✓ Timbangan Fisik Closing (Sisa Real):
                         </span>
                         <span className="text-base font-black text-emerald-950 font-mono">
-                          {(existingRec.actualClosingStockKg || 0).toFixed(3)} Kg
+                          {(Number(existingRec.actualClosingStockKg) || 0).toFixed(3)} Kg
                         </span>
                       </div>
                       {existingRec.photoUrl && (
@@ -461,6 +532,11 @@ export default function ButcherClosingView({
                     <div className="text-[10px] text-emerald-800 bg-emerald-100/70 border border-emerald-200 px-2 py-1 rounded-lg flex items-center gap-1.5 font-bold">
                       <Sparkles className="w-3 h-3 text-emerald-600 shrink-0" />
                       <span>Timbangan ini terintegrasi sebagai Stok Awal Sisa Kemarin</span>
+                    </div>
+
+                    <div className="text-[10px] text-slate-500 flex items-center justify-between pt-0.5">
+                      <span>Oleh: <strong>{existingRec.butcherName || 'Butcher'}</strong></span>
+                      <span>{existingRec.timestamp ? new Date(existingRec.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
                     </div>
                   </div>
                 ) : (
@@ -533,11 +609,11 @@ export default function ButcherClosingView({
                   const matchingPlanObj = allUniquePlans.find((p) => isPlanMatch(p.name, r.planName));
                   const planSegs = segments.filter((s) => isPlanMatch(s.plannedFabrication, r.planName));
                   const segSales = planSegs.reduce((sum, s) => sum + (s.salesKg || 0), 0);
-                  const realSales = segSales > 0 ? segSales : (typeof r.salesKg === 'number' ? r.salesKg : 0);
-                  const opening = typeof r.openingStockKg === 'number' ? r.openingStockKg : 0;
-                  const processed = typeof r.newProcessedKg === 'number' ? r.newProcessedKg : 0;
-                  const actualClosing = typeof r.actualClosingStockKg === 'number' ? r.actualClosingStockKg : 0;
-                  const totalTersedia = opening + processed + (r.adjustInKg || 0) - (r.adjustOutKg || 0);
+                  const realSales = segSales > 0 ? segSales : (Number(r.salesKg) || 0);
+                  const opening = Number(r.openingStockKg) || 0;
+                  const processed = Number(r.newProcessedKg) || 0;
+                  const actualClosing = Number(r.actualClosingStockKg) || 0;
+                  const totalTersedia = opening + processed + (Number(r.adjustInKg) || 0) - (Number(r.adjustOutKg) || 0);
                   const dynamicStokSistem = Math.max(0, totalTersedia - realSales);
                   const dynamicSusut = Math.max(0, dynamicStokSistem - actualClosing);
 
@@ -851,13 +927,13 @@ export default function ButcherClosingView({
                 <div>
                   <span className="text-[10px] text-emerald-800 font-bold block">Timbangan Sisa Fisik Akhir:</span>
                   <span className="text-base font-black text-emerald-950 font-mono">
-                    {(viewLockedPlan.record.actualClosingStockKg || 0).toFixed(3)} Kg
+                    {(Number(viewLockedPlan.record.actualClosingStockKg) || 0).toFixed(3)} Kg
                   </span>
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] text-amber-800 font-bold block">Susut Jual (Display):</span>
                   <span className="text-base font-black text-amber-900 font-mono">
-                    {(viewLockedPlan.susutJual || 0).toFixed(3)} Kg
+                    {(Number(viewLockedPlan.susutJual) || 0).toFixed(3)} Kg
                   </span>
                 </div>
               </div>
