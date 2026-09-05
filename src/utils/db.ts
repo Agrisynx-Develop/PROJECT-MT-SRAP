@@ -282,20 +282,157 @@ export const saveStockAdjustments = (adjs: StockAdjustment[], updatedSingleAdj?:
 
 export const getClosingPlanRecords = (): ClosingPlanRecord[] => {
   const data = localStorage.getItem('closing_plan_records');
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data);
+    if (!Array.isArray(parsed)) return [];
+    // Filter out unwanted test dates such as 2026-08-29
+    return parsed.filter((r) => {
+      const d = (r.date || r.timestamp || '').split('T')[0];
+      return d !== '2026-08-29';
+    });
+  } catch {
+    return [];
+  }
 };
 
 export const saveClosingPlanRecords = (records: ClosingPlanRecord[], updatedSingleRecord?: ClosingPlanRecord) => {
-  safeSetItem('closing_plan_records', JSON.stringify(records));
-  postApiBackground('/api/closing-records', records);
+  // Always sanitize before saving
+  const sanitized = records.filter((r) => {
+    const d = (r.date || r.timestamp || '').split('T')[0];
+    return d !== '2026-08-29';
+  });
+  safeSetItem('closing_plan_records', JSON.stringify(sanitized));
+  postApiBackground('/api/closing-records', sanitized);
   if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleRecord) {
+    if (updatedSingleRecord && (updatedSingleRecord.date || updatedSingleRecord.timestamp || '').split('T')[0] !== '2026-08-29') {
       upsertRecordToSheets('Closing_Fisik', updatedSingleRecord);
     } else {
-      updateTableInSheets('Closing_Fisik', records);
+      updateTableInSheets('Closing_Fisik', sanitized);
     }
   }
 };
+
+export const deleteClosingPlanRecord = (id: string): ClosingPlanRecord[] => {
+  const current = getClosingPlanRecords();
+  const updated = current.filter((r) => r.id !== id);
+  safeSetItem('closing_plan_records', JSON.stringify(updated));
+  fetch(`/api/closing-records/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  if (getGoogleAppsScriptUrl()) {
+    deleteRecordFromSheets('Closing_Fisik', id);
+  }
+  return updated;
+};
+
+/**
+ * Purge all records across all tables for a specific date (default: 2026-08-29)
+ */
+export const purgeDateRecords = (dateToPurge: string = '2026-08-29') => {
+  try {
+    // 1. Closing Plan Records
+    const closingKey = 'closing_plan_records';
+    const rawClosing = localStorage.getItem(closingKey);
+    if (rawClosing) {
+      try {
+        const parsed = JSON.parse(rawClosing);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((r) => {
+            const d = (r.date || r.timestamp || '').split('T')[0];
+            return d !== dateToPurge;
+          });
+          localStorage.setItem(closingKey, JSON.stringify(filtered));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 2. Thawing Items
+    const thawingKey = 'thawing_items';
+    const rawThawing = localStorage.getItem(thawingKey);
+    if (rawThawing) {
+      try {
+        const parsed = JSON.parse(rawThawing);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((i) => {
+            const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
+            return d !== dateToPurge;
+          });
+          localStorage.setItem(thawingKey, JSON.stringify(filtered));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 3. Fabrication Segments
+    const segKey = 'fabrication_segments';
+    const rawSeg = localStorage.getItem(segKey);
+    if (rawSeg) {
+      try {
+        const parsed = JSON.parse(rawSeg);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((s) => {
+            const d = (s.createdAt || s.transferTimestamp || '').split('T')[0];
+            return d !== dateToPurge;
+          });
+          localStorage.setItem(segKey, JSON.stringify(filtered));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Stock Adjustments
+    const adjKey = 'stock_adjustments';
+    const rawAdj = localStorage.getItem(adjKey);
+    if (rawAdj) {
+      try {
+        const parsed = JSON.parse(rawAdj);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((a) => {
+            const d = (a.date || a.createdAt || '').split('T')[0];
+            return d !== dateToPurge;
+          });
+          localStorage.setItem(adjKey, JSON.stringify(filtered));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 5. Daily Closing Reports
+    const repKey = 'daily_reports';
+    const rawRep = localStorage.getItem(repKey);
+    if (rawRep) {
+      try {
+        const parsed = JSON.parse(rawRep);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((r) => {
+            const d = (r.date || '').split('T')[0];
+            return d !== dateToPurge;
+          });
+          localStorage.setItem(repKey, JSON.stringify(filtered));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // Notify backend
+    fetch(`/api/purge-date?date=${encodeURIComponent(dateToPurge)}`, { method: 'DELETE' }).catch(() => {});
+  } catch (err) {
+    console.warn(`[Purge] Error clearing records for ${dateToPurge}:`, err);
+  }
+};
+
+// Immediately execute purge of 2026-08-29 on module evaluation
+try {
+  purgeDateRecords('2026-08-29');
+} catch {
+  // ignore
+}
+
 
 export const getThawingItems = (): ThawingItem[] => {
   const data = localStorage.getItem('thawing_items');
