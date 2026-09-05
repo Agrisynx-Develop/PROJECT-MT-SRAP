@@ -1233,6 +1233,61 @@ async function startServer() {
     }
   });
 
+  app.delete('/api/closing-records/:id', async (req, res) => {
+    try {
+      const p = getPool();
+      if (p) {
+        try {
+          await p.query('DELETE FROM closing_plan_records WHERE id = $1', [req.params.id]);
+        } catch (dbErr) {
+          console.error('Postgres delete closing record error:', dbErr);
+        }
+      }
+      inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter((r) => r.id !== req.params.id);
+      syncToSheetsBackend('Closing_Fisik', inMemoryStore.closingPlanRecords);
+      res.json({ success: true, records: inMemoryStore.closingPlanRecords });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/purge-date', async (req, res) => {
+    try {
+      const targetDate = (req.query.date as string) || '2026-08-29';
+      inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter(
+        (r) => (r.date || r.timestamp || '').split('T')[0] !== targetDate
+      );
+      inMemoryStore.thawingItems = inMemoryStore.thawingItems.filter(
+        (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== targetDate
+      );
+      inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter(
+        (s) => (s.createdAt || '').split('T')[0] !== targetDate
+      );
+      inMemoryStore.stockAdjustments = inMemoryStore.stockAdjustments.filter(
+        (a) => (a.createdAt || a.date || '').split('T')[0] !== targetDate
+      );
+      inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter(
+        (r) => (r.date || '').split('T')[0] !== targetDate
+      );
+
+      const p = getPool();
+      if (p) {
+        try {
+          await p.query('DELETE FROM closing_plan_records WHERE date = $1 OR timestamp LIKE $2', [targetDate, `${targetDate}%`]);
+          await p.query('DELETE FROM thawing_items WHERE created_at LIKE $1 OR thawing_start_time LIKE $2', [`${targetDate}%`, `${targetDate}%`]);
+          await p.query('DELETE FROM fabrication_segments WHERE created_at LIKE $1', [`${targetDate}%`]);
+          await p.query('DELETE FROM stock_adjustments WHERE created_at LIKE $1', [`${targetDate}%`]);
+          await p.query('DELETE FROM daily_closing_reports WHERE date = $1', [targetDate]);
+        } catch (dbErr) {
+          console.error('Postgres purge date error:', dbErr);
+        }
+      }
+      res.json({ success: true, purgedDate: targetDate });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ----------------- DAILY CLOSING REPORTS -----------------
   app.get('/api/reports', async (req, res) => {
     const storeId = req.query.storeId as string | undefined;
