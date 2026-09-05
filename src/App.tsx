@@ -24,6 +24,8 @@ import {
   saveStockAdjustments,
   getClosingPlanRecords,
   saveClosingPlanRecords,
+  deleteClosingPlanRecord,
+  purgeDateRecords,
   getThawingItems,
   saveThawingItems,
   getFabricationSegments,
@@ -176,25 +178,29 @@ export default function App() {
           }
           if (d.users && d.users.length > 0) setUsers(d.users);
           if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
-          if (d.thawingItems) setItems(d.thawingItems);
-          if (d.fabricationSegments) setSegments(d.fabricationSegments);
+          if (d.thawingItems) setItems((d.thawingItems || []).filter((i: any) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'));
+          if (d.fabricationSegments) setSegments((d.fabricationSegments || []).filter((s: any) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== '2026-08-29'));
           if (d.closingPlanRecords) {
             const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
-            const sanitized: ClosingPlanRecord[] = rawRecords.map((r: any) => ({
-              ...r,
-              openingStockKg: Number(r.openingStockKg) || 0,
-              newProcessedKg: Number(r.newProcessedKg) || 0,
-              adjustInKg: Number(r.adjustInKg) || 0,
-              adjustOutKg: Number(r.adjustOutKg) || 0,
-              salesKg: Number(r.salesKg) || 0,
-              closingStockBySystemKg: Number(r.closingStockBySystemKg) || 0,
-              actualClosingStockKg: Number(r.actualClosingStockKg) || 0,
-              susutJualKg: Number(r.susutJualKg) || 0,
-            }));
+            const sanitized: ClosingPlanRecord[] = rawRecords
+              .filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29')
+              .map((r: any) => ({
+                ...r,
+                openingStockKg: Number(r.openingStockKg) || 0,
+                newProcessedKg: Number(r.newProcessedKg) || 0,
+                adjustInKg: Number(r.adjustInKg) || 0,
+                adjustOutKg: Number(r.adjustOutKg) || 0,
+                salesKg: Number(r.salesKg) || 0,
+                closingStockBySystemKg: Number(r.closingStockBySystemKg) || 0,
+                actualClosingStockKg: Number(r.actualClosingStockKg) || 0,
+                susutJualKg: Number(r.susutJualKg) || 0,
+              }));
 
             // Merge with local records if local has newer closed timestamp or non-zero weight
             const local = getClosingPlanRecords();
-            const localList = Array.isArray(local) ? local : [];
+            const localList = (Array.isArray(local) ? local : []).filter(
+              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+            );
             const merged: ClosingPlanRecord[] = [...sanitized];
 
             localList.forEach((loc) => {
@@ -218,13 +224,14 @@ export default function App() {
               }
             });
 
-            setClosingRecords(merged);
-            if (merged.length > 0) {
-              saveClosingPlanRecords(merged);
+            const filteredMerged = merged.filter((r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
+            setClosingRecords(filteredMerged);
+            if (filteredMerged.length > 0) {
+              saveClosingPlanRecords(filteredMerged);
             }
           }
-          if (d.dailyClosingReports) setReports(d.dailyClosingReports);
-          if (d.stockAdjustments) setAdjustments(d.stockAdjustments);
+          if (d.dailyClosingReports) setReports((d.dailyClosingReports || []).filter((r: any) => (r.date || '').split('T')[0] !== '2026-08-29'));
+          if (d.stockAdjustments) setAdjustments((d.stockAdjustments || []).filter((a: any) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'));
           if (d.lossConfig) setLossConfig(d.lossConfig);
           setLastCloudSync(new Date().toISOString());
           return;
@@ -306,8 +313,8 @@ export default function App() {
       if (resRecords && resRecords.ok) {
         const data = await resRecords.json();
         const local = getClosingPlanRecords();
-        const serverList = Array.isArray(data) ? data : [];
-        const localList = Array.isArray(local) ? local : [];
+        const serverList = (Array.isArray(data) ? data : []).filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
+        const localList = (Array.isArray(local) ? local : []).filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
 
         // Merge: Start with server records, but keep any local records that are not on the server
         const merged = [...serverList];
@@ -328,9 +335,10 @@ export default function App() {
           }
         });
 
-        setClosingRecords(merged);
-        if (merged.length > 0) {
-          localStorage.setItem('closing_plan_records', JSON.stringify(merged));
+        const filtered = merged.filter((r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
+        setClosingRecords(filtered);
+        if (filtered.length > 0) {
+          saveClosingPlanRecords(filtered);
         }
       } else {
         setClosingRecords(getClosingPlanRecords());
@@ -1094,6 +1102,22 @@ export default function App() {
     fetch(`/api/adjustments/${id}`, { method: 'DELETE' }).catch(console.error);
   };
 
+  const handleDeleteClosingRecord = (id: string) => {
+    const updated = closingRecords.filter((r) => r.id !== id);
+    setClosingRecords(updated);
+    saveClosingPlanRecords(updated);
+    deleteClosingPlanRecord(id);
+  };
+
+  const handlePurgeDate = (dateToPurge: string) => {
+    purgeDateRecords(dateToPurge);
+    setClosingRecords((prev) => prev.filter((r) => (r.date || r.timestamp || '').split('T')[0] !== dateToPurge));
+    setItems((prev) => prev.filter((i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== dateToPurge));
+    setSegments((prev) => prev.filter((s) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== dateToPurge));
+    setAdjustments((prev) => prev.filter((a) => (a.date || a.createdAt || '').split('T')[0] !== dateToPurge));
+    setReports((prev) => prev.filter((r) => (r.date || '').split('T')[0] !== dateToPurge));
+  };
+
   // Handler: MD Add Store + Generate Paired Butcher & Admin Accounts to SQL
   const handleAddStore = async (
     storeData: Omit<Store, 'id' | 'createdAt'>,
@@ -1353,13 +1377,6 @@ export default function App() {
       icon: DollarSign,
       color: 'text-emerald-500',
       roles: ['admin'],
-    },
-    {
-      id: 'summary',
-      label: 'Rekapitulasi',
-      icon: FileSpreadsheet,
-      color: 'text-purple-500',
-      roles: ['admin', 'md'],
     },
     {
       id: 'riwayat',
@@ -1833,6 +1850,8 @@ export default function App() {
               onUpdateCogs={handleUpdateCogs}
               onAddAdjustment={handleAddAdjustment}
               onDeleteAdjustment={handleDeleteAdjustment}
+              onDeleteClosingRecord={handleDeleteClosingRecord}
+              onPurgeDate={handlePurgeDate}
               safeThawingLossPercent={lossConfig.safeThawingLossPercent}
             />
           )}
