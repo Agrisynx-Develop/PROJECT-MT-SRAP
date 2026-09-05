@@ -41,7 +41,8 @@ import {
   Search,
   Filter,
   Eye,
-  Lock
+  Lock,
+  Trash2
 } from 'lucide-react';
 
 interface AdminTokoViewProps {
@@ -54,6 +55,8 @@ interface AdminTokoViewProps {
   cogsList: CogsMaster[];
   onAddAdjustment: (adj: Omit<StockAdjustment, 'id' | 'createdAt'>) => void;
   onDeleteAdjustment?: (id: string) => void;
+  onDeleteClosingRecord?: (id: string) => void;
+  onPurgeDate?: (date: string) => void;
   onUpdateItemSales?: (itemId: string, salesKg: number) => void;
   onUpdateItemSusutJual?: (itemId: string, susutJualKg: number) => void;
   onUpdateCogs?: (updatedCogs: CogsMaster[]) => void;
@@ -70,6 +73,8 @@ export default function AdminTokoView({
   cogsList,
   onAddAdjustment,
   onDeleteAdjustment,
+  onDeleteClosingRecord,
+  onPurgeDate,
   onUpdateItemSales,
   onUpdateItemSusutJual,
   onUpdateCogs,
@@ -84,11 +89,11 @@ export default function AdminTokoView({
     const datesSet = new Set<string>();
     (items || []).forEach((i) => {
       const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-      if (d) datesSet.add(d);
+      if (d && d !== '2026-08-29') datesSet.add(d);
     });
     (closingRecords || []).forEach((c) => {
       const d = (c.date || c.timestamp || '').split('T')[0];
-      if (d) datesSet.add(d);
+      if (d && d !== '2026-08-29') datesSet.add(d);
     });
     return Array.from(datesSet).sort().reverse();
   }, [items, closingRecords]);
@@ -312,6 +317,21 @@ export default function AdminTokoView({
                 </button>
               ))}
             </div>
+          )}
+          {onPurgeDate && availableDatesWithData.includes(selectedDate) && (
+            <button
+              onClick={() => {
+                if (window.confirm(`Hapus seluruh data transaksi untuk tanggal ${selectedDate}?`)) {
+                  onPurgeDate(selectedDate);
+                  setSelectedDate(todayIso);
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-red-950/60 hover:bg-red-800 text-red-200 border border-red-700/50 rounded-lg text-xs font-bold transition active:scale-95"
+              title={`Hapus seluruh data pada tanggal ${selectedDate}`}
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              Hapus Data Tgl
+            </button>
           )}
           <button
             onClick={handleExportExcel}
@@ -805,6 +825,7 @@ export default function AdminTokoView({
                     <th className="p-3 text-right text-red-700">Susut Jual (Kg)</th>
                     <th className="p-3 text-center">Foto Bukti</th>
                     <th className="p-3">Catatan Butcher</th>
+                    <th className="p-3 text-center">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -834,6 +855,21 @@ export default function AdminTokoView({
                         )}
                       </td>
                       <td className="p-3 text-slate-600">{rec.note || '-'}</td>
+                      <td className="p-3 text-center">
+                        {onDeleteClosingRecord && (
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Hapus catatan closing fisik "${rec.planName}"?`)) {
+                                onDeleteClosingRecord(rec.id);
+                              }
+                            }}
+                            title="Hapus data closing ini"
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
