@@ -28,7 +28,10 @@ import {
   Info,
   ShieldCheck,
   Sparkles,
-  Building2
+  Building2,
+  RotateCcw,
+  Trash2,
+  Calendar
 } from 'lucide-react';
 
 interface ButcherClosingViewProps {
@@ -43,6 +46,7 @@ interface ButcherClosingViewProps {
   closingRecords?: ClosingPlanRecord[];
   existingClosingRecords?: ClosingPlanRecord[];
   onSaveClosingRecord: (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string }) => void;
+  onDeleteClosingRecord?: (id: string) => void;
   onDailyResetAndCarryover?: () => void;
   onManualSync?: () => void;
   isSyncing?: boolean;
@@ -61,6 +65,7 @@ export default function ButcherClosingView({
   closingRecords = [],
   existingClosingRecords,
   onSaveClosingRecord,
+  onDeleteClosingRecord,
   onDailyResetAndCarryover,
   onManualSync,
   isSyncing = false,
@@ -70,6 +75,10 @@ export default function ButcherClosingView({
   
   // Helper for matching plan name
   const isPlanMatch = (a?: string, b?: string) => isMatchPlan(a, b);
+
+  // Closing date selection (defaults to today, but can be set to past dates)
+  const [closingDate, setClosingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [undoToast, setUndoToast] = useState<{ record: ClosingPlanRecord; planName: string } | null>(null);
 
   // Standard Rencana Potong list
   const STANDARD_PLANS = [
@@ -267,7 +276,7 @@ export default function ButcherClosingView({
     onSaveClosingRecord({
       id: existingRec?.id,
       storeId: effectiveStoreId,
-      date: existingRec?.date || new Date().toISOString().split('T')[0],
+      date: existingRec?.date || closingDate || new Date().toISOString().split('T')[0],
       planName: selectedPlan.name,
       category: selectedPlan.category,
       openingStockKg: parseFloat(openingStockKg.toFixed(3)),
@@ -287,6 +296,30 @@ export default function ButcherClosingView({
     setSuccessMsg(`✓ Status rencana "${selectedPlan.name}" kini SUDAH CLOSING (Terlock). Timbangan fisik ${actualStock.toFixed(3)} Kg disimpan & terintegrasi sebagai calon Stok Awal besok!`);
     setTimeout(() => setSuccessMsg(''), 6000);
     setSelectedPlan(null);
+  };
+
+  // Undo / Cancel closing handler
+  const handleUndoClosing = (rec: ClosingPlanRecord, planName: string) => {
+    if (!rec?.id) return;
+    if (window.confirm(`Batalkan / Hapus closing untuk rencana "${planName}"? Status akan kembali terbuka untuk diinput ulang timbangan fisik.`)) {
+      if (onDeleteClosingRecord) {
+        onDeleteClosingRecord(rec.id);
+      }
+      setUndoToast({ record: rec, planName });
+      setSuccessMsg(`Closing "${planName}" berhasil dibatalkan (Undo). Anda dapat mengisi kembali timbangan.`);
+      setTimeout(() => setSuccessMsg(''), 5000);
+      setViewLockedPlan(null);
+      setSelectedPlan(null);
+    }
+  };
+
+  const handleRestoreClosing = () => {
+    if (undoToast?.record) {
+      onSaveClosingRecord(undoToast.record);
+      setSuccessMsg(`Closing "${undoToast.planName}" berhasil dikembalikan!`);
+      setUndoToast(null);
+      setTimeout(() => setSuccessMsg(''), 5000);
+    }
   };
 
   // Perform daily reset and carryover
@@ -412,6 +445,58 @@ export default function ButcherClosingView({
           <span className="text-sm font-bold">{successMsg}</span>
         </div>
       )}
+
+      {/* Undo Toast Notification */}
+      {undoToast && (
+        <div className="bg-amber-900 text-amber-50 px-4 py-3.5 rounded-2xl flex items-center justify-between gap-3 shadow-lg border border-amber-600 animate-in slide-in-from-top-2">
+          <div className="flex items-center gap-2.5 text-xs">
+            <AlertCircle className="w-5 h-5 text-amber-300 shrink-0" />
+            <div>
+              <span>Closing untuk <strong>"{undoToast.planName}"</strong> telah dibatalkan / dihapus (Undo).</span>
+              <p className="text-[11px] text-amber-200">Rencana ini kini terbuka kembali untuk diinput timbangan fisik baru.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRestoreClosing}
+            className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition shadow-sm shrink-0"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Kembalikan Data Closing
+          </button>
+        </div>
+      )}
+
+      {/* Date Filter & Past Date Input Selector */}
+      <div className="bg-white border border-slate-200 p-3.5 rounded-2xl shadow-xs flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 bg-red-50 text-red-700 rounded-xl">
+            <Calendar className="w-4 h-4" />
+          </div>
+          <div>
+            <span className="text-xs font-bold text-slate-800 block">Tanggal Operasional / Laporan Closing:</span>
+            <span className="text-[11px] text-slate-500">Anda dapat memilih tanggal hari ini atau tanggal yang sudah terlewat untuk mengisi laporan.</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={closingDate}
+            onChange={(e) => setClosingDate(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-red-600 focus:outline-none"
+          />
+          {closingDate !== new Date().toISOString().split('T')[0] && (
+            <button
+              type="button"
+              onClick={() => setClosingDate(new Date().toISOString().split('T')[0])}
+              className="text-[11px] px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer transition"
+            >
+              Reset ke Hari Ini
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Grid of Rencana Potong Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -550,15 +635,28 @@ export default function ButcherClosingView({
               {/* Action Button */}
               <div className="mt-4 pt-3 border-t border-slate-100">
                 {existingRec ? (
-                  <button
-                    type="button"
-                    onClick={() => handleOpenLockedDetails(plan, existingRec)}
-                    className="w-full py-2.5 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 cursor-pointer shadow-xs bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-                    <span>Sudah Closing (Lihat Rincian / Koreksi)</span>
-                    <Eye className="w-3.5 h-3.5 ml-auto text-emerald-200" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenLockedDetails(plan, existingRec)}
+                      className="flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-200 shrink-0" />
+                      <span className="truncate">Rincian Closing</span>
+                      <Eye className="w-3.5 h-3.5 ml-auto text-emerald-200 shrink-0" />
+                    </button>
+                    {onDeleteClosingRecord && (
+                      <button
+                        type="button"
+                        onClick={() => handleUndoClosing(existingRec, plan.name)}
+                        className="py-2.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 active:scale-95 shrink-0"
+                        title="Batalkan / Hapus Input Closing (Undo)"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Undo</span>
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <button
                     type="button"
@@ -972,7 +1070,7 @@ export default function ButcherClosingView({
               Dicatat oleh: <strong>{viewLockedPlan.record.butcherName}</strong> pada {viewLockedPlan.record.timestamp ? new Date(viewLockedPlan.record.timestamp).toLocaleTimeString('id-ID') : '-'}
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-wrap gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => {
@@ -984,14 +1082,25 @@ export default function ButcherClosingView({
                 className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
               >
                 <Scale className="w-4 h-4" />
-                <span>Koreksi / Update Timbangan</span>
+                <span>Koreksi / Update</span>
               </button>
+              {onDeleteClosingRecord && (
+                <button
+                  type="button"
+                  onClick={() => handleUndoClosing(viewLockedPlan.record, viewLockedPlan.plan.name)}
+                  className="py-3 px-4 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
+                  title="Batalkan / Hapus Data Closing (Undo)"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Hapus (Undo)</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setViewLockedPlan(null)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl text-xs transition cursor-pointer"
+                className="py-3 px-4 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl text-xs transition cursor-pointer"
               >
-                Tutup Rincian
+                Tutup
               </button>
             </div>
           </div>
