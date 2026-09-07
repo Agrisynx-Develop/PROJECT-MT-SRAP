@@ -816,178 +816,6 @@ export default function AdminTokoView({
                 </span>
               </div>
 
-              <form onSubmit={handleSavePastClosing} className="space-y-3.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Pilih Rencana Potong / Nama Item
-                  </label>
-                  <select
-                    value={reportPlanName}
-                    onChange={(e) => {
-                      setReportPlanName(e.target.value);
-                      const std = STANDARD_PLANS.find((p) => p.name === e.target.value);
-                      if (std) setReportCategory(std.category);
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500"
-                  >
-                    {STANDARD_PLANS.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name} ({p.category})
-                      </option>
-                    ))}
-                    <option value="CUSTOM">-- Item Kustom Lainnya --</option>
-                  </select>
-                </div>
-
-                {reportPlanName === 'CUSTOM' && (
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Ketik Nama Rencana Potong Kustom
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Contoh: TETELAN SPESIAL"
-                      onChange={(e) => setReportPlanName(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                    />
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Sisa Kemarin (Stok Awal) [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={reportOpeningStock}
-                      onChange={(e) => setReportOpeningStock(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Diolah Baru Hari Itu [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={reportNewProcessed}
-                      onChange={(e) => setReportNewProcessed(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Penjualan Real (Sales) [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={reportSales}
-                      onChange={(e) => setReportSales(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-emerald-700 focus:bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Timbangan Sisa Fisik Closing [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={reportActualStock}
-                      onChange={(e) => setReportActualStock(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-blue-800 focus:bg-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Calculation summary */}
-                <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[11px] space-y-1">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Total Tersedia:</span>
-                    <span className="font-mono font-bold">
-                      {((parseFloat(reportOpeningStock) || 0) + (parseFloat(reportNewProcessed) || 0)).toFixed(3)} Kg
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>Sisa Sistem (Sebelum Fisik):</span>
-                    <span className="font-mono font-bold">
-                      {Math.max(0, ((parseFloat(reportOpeningStock) || 0) + (parseFloat(reportNewProcessed) || 0)) - (parseFloat(reportSales) || 0)).toFixed(3)} Kg
-                    </span>
-                  </div>
-                  <div className="flex justify-between font-bold text-amber-900 pt-1 border-t border-slate-200">
-                    <span>Estimasi Susut Jual:</span>
-                    <span className="font-mono">
-                      {Math.max(0, Math.max(0, ((parseFloat(reportOpeningStock) || 0) + (parseFloat(reportNewProcessed) || 0)) - (parseFloat(reportSales) || 0)) - (parseFloat(reportActualStock) || 0)).toFixed(3)} Kg
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Catatan / Alasan Input
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Contoh: Input susulan sisa display chiller"
-                    value={reportNote}
-                    onChange={(e) => setReportNote(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 px-4 bg-blue-700 hover:bg-blue-800 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition active:scale-95 cursor-pointer"
-                  >
-                    <Save className="w-4 h-4" />
-                    {editingClosingId ? 'Simpan Perubahan Closing' : 'Simpan Data Closing'}
-                  </button>
-                  {editingClosingId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingClosingId(null);
-                        setReportOpeningStock('');
-                        setReportNewProcessed('');
-                        setReportSales('');
-                        setReportActualStock('');
-                        setReportNote('');
-                      }}
-                      className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
-                    >
-                      Batal
-                    </button>
-                  )}
-                </div>
-              </form>
-            </div>
-
-            {/* FORM B: Input Bahan Baku / Thawing Terlewat */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <Plus className="w-4 h-4 text-emerald-700" />
-                  <h3 className="text-sm font-black text-slate-900">
-                    2. Input Bahan Baku Masuk Terlewat
-                  </h3>
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                  Tgl: {selectedDate}
-                </span>
-              </div>
-
               <form onSubmit={handleSavePastMaterial} className="space-y-3.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 mb-1">
@@ -1001,12 +829,13 @@ export default function AdminTokoView({
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
                   />
                 </div>
-
+              
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 mb-1">
                       Kategori Pabrikasi
                     </label>
+              
                     <select
                       value={matCategory}
                       onChange={(e) => setMatCategory(e.target.value)}
@@ -1018,42 +847,55 @@ export default function AdminTokoView({
                       <option value="RAWON">RAWON</option>
                     </select>
                   </div>
-                  <form onSubmit={handleSavePastClosing} className="space-y-3.5">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        Pilih Rencana Potong / Nama Item
-                      </label>
-                      <select
-                        value={reportPlanName}
-                        onChange={(e) => {
-                          setReportPlanName(e.target.value);
-                          const std = STANDARD_PLANS.find((p) => p.name === e.target.value);
-                          if (std) setReportCategory(std.category);
-                        }}
-                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500"
-                      >
-                        {STANDARD_PLANS.map((p) => (
-                          <option key={p.name} value={p.name}>
-                            {p.name} ({p.category})
-                          </option>
-                        ))}
-                        <option value="CUSTOM">-- Item Kustom Lainnya --</option>
-                      </select>
-                    </div>  
-                    
-                    {reportPlanName === 'CUSTOM' && (
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        Ketik Nama Rencana Potong Kustom
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Contoh: TETELAN SPESIAL"
-                        onChange={(e) => setReportPlanName(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                      />
-                    </div>
-                  )}
+              
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                      Pilih Rencana Potong / Nama Item
+                    </label>
+              
+                    <select
+                      value={reportPlanName}
+                      onChange={(e) => {
+                        setReportPlanName(e.target.value);
+              
+                        const std = STANDARD_PLANS.find(
+                          (p) => p.name === e.target.value
+                        );
+              
+                        if (std) {
+                          setReportCategory(std.category);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                    >
+                      {STANDARD_PLANS.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name} ({p.category})
+                        </option>
+                      ))}
+              
+                      <option value="CUSTOM">
+                        -- Item Kustom Lainnya --
+                      </option>
+                    </select>
+                  </div>
+                </div>
+              
+                {reportPlanName === "CUSTOM" && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                      Ketik Nama Rencana Potong Kustom
+                    </label>
+              
+                    <input
+                      type="text"
+                      placeholder="Contoh: TETELAN SPESIAL"
+                      onChange={(e) => setReportPlanName(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                    />
+                  </div>
+                )}
+
                   
                 <div className="grid grid-cols-2 gap-3">
                   <div>
