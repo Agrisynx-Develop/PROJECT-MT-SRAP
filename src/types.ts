@@ -279,7 +279,7 @@ export interface PythonModelArtifact {
     r2Score?: number; // Nilai R-squared (0.00 - 1.00)
     mae?: number; // Mean Absolute Error
     rmse?: number; // Root Mean Squared Error
-    accuracy?: number; // Persentase akurasi
+    accuracy?: number; // Persentase akurasi 
   };
   customBaselineKg?: number; // Baseline prediksi yang dihasilkan model (Kg)
   multiplierConfig?: {
