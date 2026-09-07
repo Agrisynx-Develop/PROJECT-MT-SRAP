@@ -32,6 +32,8 @@ import {
   saveFabricationSegments,
   getDailyReports,
   saveDailyReports,
+  deleteDailyReport,
+  deleteFabricationSegment,
   getLossConfig,
   saveLossConfig,
   resetDatabase,
@@ -87,7 +89,8 @@ import {
   Database,
   CheckCircle2,
   CheckSquare,
-  User
+  User,
+  Camera
 } from 'lucide-react';
 
 // Helper to normalize user role regardless of casing ('MD_PUSAT', 'ADMIN_TOKO', 'md', 'admin', 'butcher')
@@ -479,18 +482,25 @@ export default function App() {
 
   // Handler: Add Item for Thawing
   const handleAddItem = (
-    newItem: Omit<ThawingItem, 'id' | 'status' | 'thawingStartTime' | 'createdAt' | 'butcherId' | 'butcherName'>
+    newItem: Omit<ThawingItem, 'id' | 'status' | 'thawingStartTime' | 'createdAt' | 'butcherId' | 'butcherName'> & {
+      createdAt?: string;
+      status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
+      thawingStartTime?: string;
+      storeId?: string;
+    }
   ) => {
     const now = new Date();
+    const effectiveStoreId = newItem.storeId || currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const createdAtTime = newItem.createdAt || now.toISOString();
     const item: ThawingItem = {
       ...newItem,
-      id: `meat_${Date.now()}`,
-      storeId: currentUser?.storeId || 'store_ckr',
-      status: 'thawing',
-      thawingStartTime: now.toISOString(),
-      createdAt: now.toISOString(),
+      id: `meat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      storeId: effectiveStoreId,
+      status: newItem.status || 'thawing',
+      thawingStartTime: newItem.thawingStartTime || createdAtTime,
+      createdAt: createdAtTime,
       butcherName: currentUser?.fullName || 'Petugas Butcher',
-      isCarryover: false,
+      isCarryover: newItem.isCarryover || false,
     };
     const updated = [item, ...items];
     setItems(updated);
@@ -765,6 +775,70 @@ export default function App() {
     const storeClosings = closingRecords.filter((r) => matchStoreEntity(r.storeId, currentStore));
     const storeSegs = segments.filter((s) => matchStoreEntity(s.storeId, currentStore));
     const storeItms = items.filter((i) => matchStoreEntity(i.storeId, currentStore));
+
+    // 0. Freeze & Save official DailyClosingReport for this store closing before reset
+    const closingDate = storeClosings[0]?.date || new Date().toISOString().split('T')[0];
+    const totalRaw = storeItms.filter((i) => !i.isCarryover).reduce((s, i) => s + i.weightBeforeThawing, 0);
+    const totalThawed = storeItms.filter((i) => !i.isCarryover).reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing), 0);
+    const totalFab = storeSegs.reduce((s, seg) => s + seg.actualWeight, 0);
+    const totalSales = storeSegs.reduce((s, seg) => s + (seg.salesKg || 0), 0) + storeClosings.reduce((s, c) => s + (c.salesKg || 0), 0);
+    const carryoverOpening = storeItms.filter((i) => i.isCarryover).reduce((s, i) => s + i.weightBeforeThawing, 0);
+    const currentClosing = storeClosings.reduce((s, c) => s + (c.actualClosingStockKg || 0), 0);
+    const totalThawLoss = Math.max(0, totalRaw - totalThawed);
+    const totalFabLoss = Math.max(0, totalThawed - totalFab);
+    const totalSusutJual = storeClosings.reduce((s, c) => s + (c.susutJualKg || 0), 0);
+
+    const closedReport: DailyClosingReport = {
+      id: `rep_closed_${effectiveStoreId}_${closingDate}_${Date.now()}`,
+      storeId: effectiveStoreId,
+      storeName: currentStore?.name || 'TDN CKR',
+      date: closingDate,
+      totalThawingQty: storeItms.length,
+      totalProcessedQty: storeSegs.length,
+      totalWeightBeforeThawing: totalRaw,
+      totalWeightAfterThawing: totalThawed,
+      totalWeightAfterFabrication: totalFab,
+      totalThawingLoss: totalThawLoss,
+      totalFabricationLoss: totalFabLoss,
+      totalProcessLoss: totalThawLoss + totalFabLoss,
+      totalSusutJual: totalSusutJual,
+      totalSalesKg: totalSales,
+      carryoverOpeningStockKg: carryoverOpening,
+      currentClosingStockKg: currentClosing,
+      financialLossRupiah: (totalThawLoss + totalFabLoss + totalSusutJual) * 102000,
+      butcherInCharge: currentUser?.fullName || 'Petugas Butcher',
+      adminInCharge: currentUser?.role === 'admin' ? currentUser.fullName : undefined,
+      isClosed: true,
+      closedAt: new Date().toISOString(),
+      closingPlanRecords: storeClosings,
+      itemsProcessed: storeItms.map((i) => ({
+        id: i.id,
+        name: i.name,
+        plannedFabrication: i.plannedFabrication,
+        pabrikasiCategory: i.pabrikasiCategory,
+        weightBefore: i.weightBeforeThawing,
+        weightAfter: i.weightAfterThawing || i.weightBeforeThawing,
+        finalWeight: i.weightAfterThawing || i.weightBeforeThawing,
+        thawingLossPercent: i.shrinkageThawingPercent || 0,
+        fabLossPercent: 0,
+        salesKg: i.salesKg || 0,
+        openingStockKg: i.isCarryover ? i.weightBeforeThawing : 0,
+        isCarryover: i.isCarryover,
+      })),
+      photos: storeClosings
+        .filter((c) => c.photoUrl)
+        .map((c, idx) => ({
+          id: `photo_${idx}_${Date.now()}`,
+          url: c.photoUrl!,
+          caption: c.photoCaption || `Bukti Closing ${c.planName}`,
+          category: 'Timbangan',
+          uploadedAt: c.timestamp,
+        })),
+    };
+
+    const newReports = [closedReport, ...reports.filter((r) => !(matchStoreEntity(r.storeId, currentStore) && r.date === closingDate))];
+    setReports(newReports);
+    saveDailyReports(newReports, closedReport);
 
     // 1. Generate carryover thawing items from actual closing physical stock
     const carryoverItems: ThawingItem[] = [];
@@ -1109,6 +1183,13 @@ export default function App() {
     deleteClosingPlanRecord(id);
   };
 
+  const handleDeleteReport = (id: string) => {
+    const updated = reports.filter((r) => r.id !== id);
+    setReports(updated);
+    saveDailyReports(updated);
+    deleteDailyReport(id);
+  };
+
   const handlePurgeDate = (dateToPurge: string) => {
     purgeDateRecords(dateToPurge);
     setClosingRecords((prev) => prev.filter((r) => (r.date || r.timestamp || '').split('T')[0] !== dateToPurge));
@@ -1383,7 +1464,7 @@ export default function App() {
       label: 'Riwayat Harian',
       icon: History,
       color: 'text-slate-500',
-      roles: ['admin'],
+      roles: ['admin', 'butcher', 'md'],
     },
   ];
 
@@ -1832,8 +1913,11 @@ export default function App() {
               segments={storeSegments}
               reports={storeReports}
               closingRecords={storeClosingRecords}
+              adjustments={storeAdjustments}
+              cogsList={cogsList}
               currentStore={currentStore}
               onCloseDay={handleSaveDailyReport}
+              onDeleteReport={handleDeleteReport}
             />
           )}
 
@@ -1851,6 +1935,9 @@ export default function App() {
               onAddAdjustment={handleAddAdjustment}
               onDeleteAdjustment={handleDeleteAdjustment}
               onDeleteClosingRecord={handleDeleteClosingRecord}
+              onSaveClosingRecord={handleSaveClosingRecord}
+              onAddItem={handleAddItem}
+              onSaveDailyReport={handleSaveDailyReport}
               onPurgeDate={handlePurgeDate}
               safeThawingLossPercent={lossConfig.safeThawingLossPercent}
             />
