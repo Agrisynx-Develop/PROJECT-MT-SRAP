@@ -183,3 +183,114 @@ export interface LossAlertConfig {
   safeFabricationLossPercent: number;
   salesPredictionKg?: number;
 }
+
+export interface TrainingFileRecord {
+  id: string;
+  storeId: string;
+  storeName?: string;
+  title: string;
+  category?: 'SOP & Standard Potong' | 'Evaluasi Hasil Praktik' | 'Sanitasi & Hygiene' | 'Sertifikasi Butcher' | 'Pelatihan Alat & Timbangan' | 'Lainnya' | string;
+  trainerName?: string;
+  participantNames?: string;
+  date: string; // YYYY-MM-DD
+  fileName: string;
+  fileSizeFormatted: string;
+  fileType: string;
+  fileDataUrl: string; // Base64 data url for download & preview
+  scoreNotes?: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
+export interface DailyTargetManualConfig {
+  id: string;
+  storeId: string;
+  date: string; // YYYY-MM-DD
+  // Target / Jumlah Operasional Harian Toko
+  targetProduksiKg?: number; // Target total olah / produksi daging harian (Kg)
+  targetSalesKg?: number; // Target penjualan harian (Kg)
+  targetToleransiSusutPercent?: number; // Target batas susut harian (%)
+  // Training harian
+  targetTrainingSesiHarian?: number; // Target jumlah sesi training per hari
+  targetPesertaTrainingHarian?: number; // Target jumlah butcher yang ditraining per hari
+  // Catatan instruksi harian admin
+  catatanHarian?: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+/**
+ * Record dataset historis penjualan untuk Training Model Prediksi Sales Machine Learning
+ */
+export interface SalesTrainingRecord {
+  id: string;
+  storeId: string;
+  date: string; // YYYY-MM-DD
+  dayName?: string; // Senin, Selasa, Rabu, Kamis, Jumat, Sabtu, Minggu
+  planName?: string; // Rencana Potong / Nama Produk
+  category?: string; // Kategori Pabrikasi
+  salesKg: number; // Jumlah penjualan historis (Kg)
+  productionKg?: number; // Jumlah olah / potong (Kg)
+  lossKg?: number; // Susut (Kg)
+  lossPercent?: number; // Susut (%)
+  notes?: string; // Catatan promo, cuaca, libur, event
+  source?: 'upload_file' | 'manual_input' | 'system_closing';
+  createdAt?: string;
+  // DUKUNGAN DATA DINAMIS TIDAK BAKU:
+  rawRow?: Record<string, any>; // Seluruh kolom asli dari file yang di-upload
+  customColumns?: string[]; // Daftar header kolom asli dari file
+}
+
+/**
+ * Konfigurasi & Parameter Model ML Prediksi Sales
+ */
+export interface SalesPredictionModelConfig {
+  storeId: string;
+  targetColumnName?: string; // Nama kolom yang dijadikan target penjualan (ML)
+  customColumns?: string[]; // Daftar kolom yang sedang aktif ditampilkan
+  customBaselineKg?: number; // Baseline default olah/sales (Kg)
+  weekendMultiplier?: number; // Pengali akhir pekan (default: 1.35)
+  paydayMultiplier?: number; // Pengali tanggal gajian (default: 1.25)
+  fridayMultiplier?: number; // Pengali hari jumat (default: 1.15)
+  manualOverrideKg?: number; // Override manual target sales
+  manualOverrideDate?: string; // Tanggal override aktif
+  algorithmMode?: 'dataset_moving_average' | 'day_of_week_regression' | 'hybrid_ml' | 'python_model';
+  activePythonModelId?: string; // ID Model Python (.pkl, .joblib, dll) yang sedang aktif
+  activePythonModelName?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Metadata & File Artifact Model Machine Learning hasil training Python (.pkl, .joblib, .onnx, dll)
+ */
+export interface PythonModelArtifact {
+  id: string;
+  storeId: string;
+  fileName: string;
+  fileType: 'pkl' | 'joblib' | 'onnx' | 'parquet' | 'pt' | 'h5' | 'json' | 'pickle' | 'other';
+  fileSize: number; // bytes
+  fileSizeFormatted: string;
+  algorithmName?: string; // e.g. RandomForestRegressor, XGBoost, LinearRegression, PyTorch LSTM, Scikit-Learn Pipeline
+  pythonFramework?: string; // e.g. Scikit-Learn, XGBoost, PyTorch, Statsmodels, Pandas Parquet
+  pickleProtocol?: number; // e.g. 2, 3, 4, 5
+  detectedModules?: string[]; // Module / package yang terdeteksi dari binary dump
+  features?: string[];
+  metrics?: {
+    r2Score?: number; // Nilai R-squared (0.00 - 1.00)
+    mae?: number; // Mean Absolute Error
+    rmse?: number; // Root Mean Squared Error
+    accuracy?: number; // Persentase akurasi
+  };
+  customBaselineKg?: number; // Baseline prediksi yang dihasilkan model (Kg)
+  multiplierConfig?: {
+    weekendMultiplier?: number;
+    paydayMultiplier?: number;
+    fridayMultiplier?: number;
+  };
+  isActive: boolean; // Apakah model ini yang sedang aktif digunakan untuk prediksi sales
+  notes?: string;
+  base64Data?: string; // Data file untuk didownload kembali
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
