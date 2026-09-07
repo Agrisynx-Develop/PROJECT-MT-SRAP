@@ -37,6 +37,7 @@ import {
   ShoppingBag,
   Store as StoreIcon,
   ArrowRightLeft,
+  RotateCcw,
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -137,6 +138,7 @@ export default function Dashboard({
   const [uploadProgress, setUploadProgress] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [undoDeletedItem, setUndoDeletedItem] = useState<ThawingItem | null>(null);
 
   // Modals State
   const [isSalesModalOpen, setIsSalesModalOpen] = useState(false);
@@ -380,13 +382,35 @@ export default function Dashboard({
     setEditingItemId(null);
   };
 
-  // Handle Delete Single Item
+  // Handle Delete Single Item with Undo
   const handleDeleteItemClick = (item: ThawingItem) => {
     if (onDeleteItem) {
       onDeleteItem(item.id);
     }
-    setSuccessMsg(`Bahan "${item.name}" berhasil dihapus!`);
-    setTimeout(() => setSuccessMsg(''), 3000);
+    setUndoDeletedItem(item);
+    setSuccessMsg(`Bahan "${item.name}" berhasil dihapus.`);
+  };
+
+  // Handle Restore Deleted Item (Undo)
+  const handleRestoreDeletedItem = () => {
+    if (undoDeletedItem && onAddItem) {
+      onAddItem({
+        name: undoDeletedItem.name,
+        plannedFabrication: undoDeletedItem.plannedFabrication,
+        pabrikasiCategory: undoDeletedItem.pabrikasiCategory,
+        weightBeforeThawing: undoDeletedItem.weightBeforeThawing,
+        weightAfterThawing: undoDeletedItem.weightAfterThawing,
+        shrinkageThawingPercent: undoDeletedItem.shrinkageThawingPercent,
+        openingPurpose: undoDeletedItem.openingPurpose,
+        isCarryover: undoDeletedItem.isCarryover,
+        image: undoDeletedItem.image,
+        salesKg: undoDeletedItem.salesKg,
+        susutJualKg: undoDeletedItem.susutJualKg,
+      });
+      setSuccessMsg(`Bahan "${undoDeletedItem.name}" berhasil dikembalikan (Undo)!`);
+      setUndoDeletedItem(null);
+      setTimeout(() => setSuccessMsg(''), 4000);
+    }
   };
 
   // Handle Delete Entire Category (Caption & Group)
@@ -530,6 +554,43 @@ export default function Dashboard({
           </div>
         </div>
       </div>
+
+      {/* UNDO DELETED ITEM BANNER */}
+      {undoDeletedItem && (
+        <div className="bg-slate-900 border-2 border-amber-400 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-white shadow-xl animate-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-500/20 text-amber-300 rounded-xl">
+              <RotateCcw className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">
+                Bahan <span className="text-amber-300 font-mono font-black">"{undoDeletedItem.name}"</span> ({(undoDeletedItem.weightBeforeThawing || 0).toFixed(3)} Kg) berhasil dihapus.
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Salah input atau salah hapus? Klik tombol Undo untuk mengembalikan bahan ini.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRestoreDeletedItem}
+              className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95 transition"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Kembalikan (Undo)
+            </button>
+            <button
+              type="button"
+              onClick={() => setUndoDeletedItem(null)}
+              className="p-2 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+              title="Tutup"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ALERT BANNER IF OVERALL SHRINKAGE EXCEEDS 2% */}
       {overallShrinkage.shrinkageRatePercent > 2.0 && (
