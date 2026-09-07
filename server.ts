@@ -1064,6 +1064,24 @@ async function startServer() {
     }
   });
 
+  app.delete('/api/fabrication-segments/:id', async (req, res) => {
+    try {
+      const p = getPool();
+      if (p) {
+        try {
+          await p.query('DELETE FROM fabrication_segments WHERE id = $1', [req.params.id]);
+        } catch (dbErr) {
+          console.error('Postgres delete segment error:', dbErr);
+        }
+      }
+      inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter((s) => s.id !== req.params.id);
+      syncToSheetsBackend('Pabrikasi_Segmen', inMemoryStore.fabricationSegments);
+      res.json({ success: true, segments: inMemoryStore.fabricationSegments });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ----------------- STOCK ADJUSTMENTS -----------------
   app.get('/api/adjustments', async (req, res) => {
     const storeId = req.query.storeId as string | undefined;
@@ -1371,6 +1389,24 @@ async function startServer() {
           inMemoryStore.dailyClosingReports.unshift(r);
         }
       }
+      syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
+      res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/reports/:id', async (req, res) => {
+    try {
+      const p = getPool();
+      if (p) {
+        try {
+          await p.query('DELETE FROM daily_closing_reports WHERE id = $1', [req.params.id]);
+        } catch (dbErr) {
+          console.error('Postgres delete report error:', dbErr);
+        }
+      }
+      inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter((r) => r.id !== req.params.id);
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
     } catch (err: any) {
