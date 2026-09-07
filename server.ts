@@ -71,6 +71,11 @@ const inMemoryStore = {
   stockAdjustments: [] as any[],
   closingPlanRecords: [] as any[],
   dailyClosingReports: [] as any[],
+  trainingFiles: [] as any[],
+  dailyTargets: [] as any[],
+  salesTrainingDataset: [] as any[],
+  salesPredictionConfigs: {} as Record<string, any>,
+  pythonModels: [] as any[],
   lossConfig: {
     maxProcessLossPercent: 1.0,
     maxSalesLossPercent: 1.0,
@@ -1409,6 +1414,192 @@ async function startServer() {
       inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter((r) => r.id !== req.params.id);
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------- TRAINING FILES API -----------------
+  app.get('/api/training-files', (req, res) => {
+    res.json({ success: true, files: inMemoryStore.trainingFiles });
+  });
+
+  app.post('/api/training-files', (req, res) => {
+    try {
+      if (Array.isArray(req.body)) {
+        inMemoryStore.trainingFiles = req.body;
+      } else {
+        const f = req.body;
+        const idx = inMemoryStore.trainingFiles.findIndex((item) => item.id === f.id);
+        if (idx >= 0) {
+          inMemoryStore.trainingFiles[idx] = { ...inMemoryStore.trainingFiles[idx], ...f };
+        } else {
+          inMemoryStore.trainingFiles.unshift(f);
+        }
+      }
+      res.json({ success: true, files: inMemoryStore.trainingFiles });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/training-files/:id', (req, res) => {
+    try {
+      inMemoryStore.trainingFiles = inMemoryStore.trainingFiles.filter((f) => f.id !== req.params.id);
+      res.json({ success: true, files: inMemoryStore.trainingFiles });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------- DAILY TARGETS API -----------------
+  app.get('/api/daily-targets', (req, res) => {
+    res.json({ success: true, configs: inMemoryStore.dailyTargets });
+  });
+
+  app.post('/api/daily-targets', (req, res) => {
+    try {
+      if (Array.isArray(req.body)) {
+        inMemoryStore.dailyTargets = req.body;
+      } else {
+        const c = req.body;
+        const idx = inMemoryStore.dailyTargets.findIndex((item) => item.id === c.id);
+        if (idx >= 0) {
+          inMemoryStore.dailyTargets[idx] = { ...inMemoryStore.dailyTargets[idx], ...c };
+        } else {
+          inMemoryStore.dailyTargets.push(c);
+        }
+      }
+      res.json({ success: true, configs: inMemoryStore.dailyTargets });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------- SALES PREDICTION TRAINING DATASET API -----------------
+  app.get('/api/sales-training-dataset', (req, res) => {
+    const storeId = req.query.storeId as string;
+    let records = inMemoryStore.salesTrainingDataset;
+    if (storeId) {
+      records = records.filter((r: any) => !r.storeId || String(r.storeId) === String(storeId));
+    }
+    res.json({ success: true, dataset: records });
+  });
+
+  app.post('/api/sales-training-dataset', (req, res) => {
+    try {
+      if (Array.isArray(req.body)) {
+        inMemoryStore.salesTrainingDataset = req.body;
+      } else {
+        const item = req.body;
+        const idx = inMemoryStore.salesTrainingDataset.findIndex((r: any) => r.id === item.id);
+        if (idx >= 0) {
+          inMemoryStore.salesTrainingDataset[idx] = { ...inMemoryStore.salesTrainingDataset[idx], ...item };
+        } else {
+          inMemoryStore.salesTrainingDataset.unshift(item);
+        }
+      }
+      res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/sales-training-dataset/:id', (req, res) => {
+    try {
+      inMemoryStore.salesTrainingDataset = inMemoryStore.salesTrainingDataset.filter(
+        (r: any) => r.id !== req.params.id
+      );
+      res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/sales-training-dataset', (req, res) => {
+    try {
+      const storeId = req.query.storeId as string;
+      if (storeId) {
+        inMemoryStore.salesTrainingDataset = inMemoryStore.salesTrainingDataset.filter(
+          (r: any) => r.storeId && String(r.storeId) !== String(storeId)
+        );
+      } else {
+        inMemoryStore.salesTrainingDataset = [];
+      }
+      res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------- SALES PREDICTION MODEL CONFIG API -----------------
+  app.get('/api/sales-prediction-config', (req, res) => {
+    const storeId = (req.query.storeId as string) || '1';
+    const cfg = inMemoryStore.salesPredictionConfigs[storeId] || {
+      storeId,
+      customBaselineKg: 35.0,
+      weekendMultiplier: 1.35,
+      paydayMultiplier: 1.25,
+      fridayMultiplier: 1.15,
+      algorithmMode: 'hybrid_ml',
+    };
+    res.json({ success: true, config: cfg });
+  });
+
+  app.post('/api/sales-prediction-config', (req, res) => {
+    try {
+      const cfg = req.body;
+      const storeId = cfg.storeId || '1';
+      inMemoryStore.salesPredictionConfigs[storeId] = {
+        ...inMemoryStore.salesPredictionConfigs[storeId],
+        ...cfg,
+        updatedAt: new Date().toISOString(),
+      };
+      res.json({ success: true, config: inMemoryStore.salesPredictionConfigs[storeId] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------- PYTHON TRAINED ML MODELS API (.pkl, .joblib, dll) -----------------
+  app.get('/api/python-models', (req, res) => {
+    const storeId = req.query.storeId as string;
+    if (storeId) {
+      const filtered = inMemoryStore.pythonModels.filter((m: any) => !m.storeId || String(m.storeId) === String(storeId));
+      return res.json(filtered);
+    }
+    res.json(inMemoryStore.pythonModels);
+  });
+
+  app.post('/api/python-models', (req, res) => {
+    try {
+      const incoming = req.body;
+      if (Array.isArray(incoming)) {
+        // Merge or replace
+        const incomingIds = new Set(incoming.map((m: any) => m.id));
+        inMemoryStore.pythonModels = [
+          ...inMemoryStore.pythonModels.filter((m: any) => !incomingIds.has(m.id)),
+          ...incoming,
+        ];
+      } else if (incoming && incoming.id) {
+        const idx = inMemoryStore.pythonModels.findIndex((m: any) => m.id === incoming.id);
+        if (idx >= 0) {
+          inMemoryStore.pythonModels[idx] = { ...inMemoryStore.pythonModels[idx], ...incoming };
+        } else {
+          inMemoryStore.pythonModels.push(incoming);
+        }
+      }
+      res.json({ success: true, models: inMemoryStore.pythonModels });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/python-models/:id', (req, res) => {
+    try {
+      const id = req.params.id;
+      inMemoryStore.pythonModels = inMemoryStore.pythonModels.filter((m: any) => m.id !== id);
+      res.json({ success: true, models: inMemoryStore.pythonModels });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
