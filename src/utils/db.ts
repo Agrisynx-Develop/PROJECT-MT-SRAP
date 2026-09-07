@@ -8,6 +8,11 @@ import {
   FabricationSegment,
   DailyClosingReport,
   LossAlertConfig,
+  TrainingFileRecord,
+  DailyTargetManualConfig,
+  SalesTrainingRecord,
+  SalesPredictionModelConfig,
+  PythonModelArtifact,
 } from '../types';
 import {
   fetchAllDataFromSheets,
@@ -578,3 +583,198 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
   }
   return result;
 };
+
+// --- TRAINING FILES STORAGE ---
+export const getTrainingFiles = (): TrainingFileRecord[] => {
+  try {
+    const data = localStorage.getItem('training_files_records');
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveTrainingFiles = (files: TrainingFileRecord[]): void => {
+  safeSetItem('training_files_records', JSON.stringify(files));
+  postApiBackground('/api/training-files', files);
+};
+
+export const deleteTrainingFile = (id: string): TrainingFileRecord[] => {
+  const current = getTrainingFiles();
+  const updated = current.filter((f) => f.id !== id);
+  safeSetItem('training_files_records', JSON.stringify(updated));
+  fetch(`/api/training-files/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  return updated;
+};
+
+// --- DAILY TARGET MANUAL CONFIGS STORAGE ---
+export const getDailyTargetConfigs = (): DailyTargetManualConfig[] => {
+  try {
+    const data = localStorage.getItem('daily_target_configs');
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveDailyTargetConfigs = (configs: DailyTargetManualConfig[]): void => {
+  safeSetItem('daily_target_configs', JSON.stringify(configs));
+  postApiBackground('/api/daily-targets', configs);
+};
+
+// --- SALES PREDICTION TRAINING DATASET STORAGE ---
+export const generateDefaultSalesTrainingData = (storeId: string = '1'): SalesTrainingRecord[] => {
+  const result: SalesTrainingRecord[] = [];
+  const baseDate = new Date();
+  const daysOfWeek = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const plans = [
+    { name: 'D.sapi pot. rdang', cat: 'DAGING FRESH', baseKg: 18.5 },
+    { name: 'Daging Rendang Shankle', cat: 'DAGING FRESH', baseKg: 11.2 },
+    { name: 'Rawon Curah', cat: 'RAWON FRESH', baseKg: 7.8 },
+    { name: 'FRIBOY / Daging Prem 2', cat: 'DAGING PREMIUM', baseKg: 5.5 },
+  ];
+
+  // Generate 21 days historical training dataset
+  for (let i = 21; i >= 1; i--) {
+    const d = new Date(baseDate);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const dayIndex = d.getDay();
+    const dayName = daysOfWeek[dayIndex];
+    const isWeekend = dayIndex === 0 || dayIndex === 6;
+    const isFriday = dayIndex === 5;
+    const dayMultiplier = isWeekend ? 1.35 : isFriday ? 1.15 : 1.0;
+
+    plans.forEach((p, idx) => {
+      // Add slight realistic variance
+      const variance = 0.9 + ((i * 3 + idx * 7) % 25) / 100;
+      const salesKg = Math.round(p.baseKg * dayMultiplier * variance * 10) / 10;
+      const productionKg = Math.round((salesKg + 1.2) * 10) / 10;
+      const lossKg = Math.round((productionKg - salesKg) * 0.2 * 10) / 10;
+      const lossPct = Math.round((lossKg / productionKg) * 1000) / 10;
+
+      result.push({
+        id: `tr_${storeId}_${dateStr}_${idx}`,
+        storeId,
+        date: dateStr,
+        dayName,
+        planName: p.name,
+        category: p.cat,
+        salesKg,
+        productionKg,
+        lossKg,
+        lossPercent: lossPct,
+        notes: isWeekend ? 'Lonjakan weekend reguler' : 'Hari kerja reguler',
+        source: 'upload_file',
+        createdAt: d.toISOString(),
+      });
+    });
+  }
+
+  return result;
+};
+
+export const getSalesTrainingDataset = (storeId?: string): SalesTrainingRecord[] => {
+  try {
+    const data = localStorage.getItem('sales_training_dataset');
+    if (data) {
+      const parsed: SalesTrainingRecord[] = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return storeId ? parsed.filter((r) => !r.storeId || String(r.storeId) === String(storeId)) : parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load sales training dataset:', e);
+  }
+
+  // If empty, generate realistic seed dataset
+  const seed = generateDefaultSalesTrainingData(storeId || '1');
+  safeSetItem('sales_training_dataset', JSON.stringify(seed));
+  postApiBackground('/api/sales-training-dataset', seed);
+  return seed;
+};
+
+export const saveSalesTrainingDataset = (dataset: SalesTrainingRecord[]): void => {
+  safeSetItem('sales_training_dataset', JSON.stringify(dataset));
+  postApiBackground('/api/sales-training-dataset', dataset);
+};
+
+export const getSalesPredictionConfig = (storeId: string = '1'): SalesPredictionModelConfig => {
+  try {
+    const data = localStorage.getItem(`sales_ml_config_${storeId}`);
+    if (data) {
+      return JSON.parse(data);
+    }
+  } catch {
+    // fallback
+  }
+
+  return {
+    storeId,
+    customBaselineKg: 35.0,
+    weekendMultiplier: 1.35,
+    paydayMultiplier: 1.25,
+    fridayMultiplier: 1.15,
+    algorithmMode: 'hybrid_ml',
+    updatedAt: new Date().toISOString(),
+  };
+};
+
+export const saveSalesPredictionConfig = (config: SalesPredictionModelConfig): void => {
+  safeSetItem(`sales_ml_config_${config.storeId}`, JSON.stringify(config));
+  postApiBackground('/api/sales-prediction-config', config);
+};
+
+// --- PYTHON TRAINED MODEL ARTIFACTS STORAGE (.pkl, .joblib, .onnx, dll) ---
+export const getPythonModels = (storeId?: string): PythonModelArtifact[] => {
+  try {
+    const data = localStorage.getItem('python_ml_models');
+    if (data) {
+      const parsed: PythonModelArtifact[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return storeId ? parsed.filter((m) => !m.storeId || String(m.storeId) === String(storeId)) : parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load python models:', e);
+  }
+  return [];
+};
+
+export const savePythonModels = (models: PythonModelArtifact[]): void => {
+  safeSetItem('python_ml_models', JSON.stringify(models));
+  postApiBackground('/api/python-models', models);
+};
+
+export const deletePythonModel = (id: string, storeId?: string): PythonModelArtifact[] => {
+  const current = getPythonModels();
+  const updated = current.filter((m) => m.id !== id);
+  savePythonModels(updated);
+  fetch(`/api/python-models/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  return storeId ? updated.filter((m) => !m.storeId || String(m.storeId) === String(storeId)) : updated;
+};
+
+export const setActivePythonModel = (modelId: string | null, storeId: string = '1'): void => {
+  const models = getPythonModels();
+  const updatedModels = models.map((m) => {
+    if (String(m.storeId) === String(storeId)) {
+      return { ...m, isActive: m.id === modelId };
+    }
+    return m;
+  });
+  savePythonModels(updatedModels);
+
+  // Update sales prediction config
+  const cfg = getSalesPredictionConfig(storeId);
+  const activeModel = updatedModels.find((m) => m.id === modelId && String(m.storeId) === String(storeId));
+  const newCfg: SalesPredictionModelConfig = {
+    ...cfg,
+    algorithmMode: activeModel ? 'python_model' : 'hybrid_ml',
+    activePythonModelId: activeModel ? activeModel.id : undefined,
+    activePythonModelName: activeModel ? (activeModel.algorithmName || activeModel.fileName) : undefined,
+    customBaselineKg: activeModel?.customBaselineKg ? activeModel.customBaselineKg : cfg.customBaselineKg,
+    updatedAt: new Date().toISOString(),
+  };
+  saveSalesPredictionConfig(newCfg);
+};
+
