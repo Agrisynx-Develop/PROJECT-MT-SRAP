@@ -474,6 +474,17 @@ export const saveFabricationSegments = (segments: FabricationSegment[], updatedS
   }
 };
 
+export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
+  const current = getFabricationSegments();
+  const updated = current.filter((s) => s.id !== id);
+  safeSetItem('fabrication_segments', JSON.stringify(updated));
+  fetch(`/api/fabrication-segments/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  if (getGoogleAppsScriptUrl()) {
+    deleteRecordFromSheets('Pabrikasi_Segmen', id);
+  }
+  return updated;
+};
+
 export const getDailyReports = (): DailyClosingReport[] => {
   const data = localStorage.getItem('daily_reports');
   return data ? JSON.parse(data) : [];
@@ -489,6 +500,17 @@ export const saveDailyReports = (reports: DailyClosingReport[], updatedSingleRep
       updateTableInSheets('Laporan_Closing', reports);
     }
   }
+};
+
+export const deleteDailyReport = (id: string): DailyClosingReport[] => {
+  const current = getDailyReports();
+  const updated = current.filter((r) => r.id !== id);
+  safeSetItem('daily_reports', JSON.stringify(updated));
+  fetch(`/api/reports/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  if (getGoogleAppsScriptUrl()) {
+    deleteRecordFromSheets('Laporan_Closing', id);
+  }
+  return updated;
 };
 
 export const getLossConfig = (): LossAlertConfig => {
