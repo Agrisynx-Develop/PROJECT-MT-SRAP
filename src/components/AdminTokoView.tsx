@@ -10,6 +10,7 @@ import {
   DailyClosingReport
 } from '../types';
 import ExcelReportViewer from './ExcelReportViewer';
+import AdminTrainingAndTargetView from './AdminTrainingAndTargetView';
 import { matchStoreEntity } from '../utils/reportCalculations';
 import {
   exportStoreDailyLaporanExcel,
@@ -46,7 +47,9 @@ import {
   RotateCcw,
   Edit2,
   Save,
-  FileCheck
+  FileCheck,
+  GraduationCap,
+  Cpu,
 } from 'lucide-react';
 
 interface AdminTokoViewProps {
@@ -68,6 +71,7 @@ interface AdminTokoViewProps {
   onUpdateItemSusutJual?: (itemId: string, susutJualKg: number) => void;
   onUpdateCogs?: (updatedCogs: CogsMaster[]) => void;
   safeThawingLossPercent: number;
+  onUpdateSalesPrediction?: (newTargetKg: number) => void;
 }
 
 export default function AdminTokoView({
@@ -89,8 +93,9 @@ export default function AdminTokoView({
   onUpdateItemSusutJual,
   onUpdateCogs,
   safeThawingLossPercent,
+  onUpdateSalesPrediction,
 }: AdminTokoViewProps) {
-  const [activeTab, setActiveTab] = useState<'excel' | 'overview' | 'input_laporan' | 'adjust' | 'stock' | 'cogs' | 'export'>('excel');
+  const [activeTab, setActiveTab] = useState<'excel' | 'overview' | 'input_laporan' | 'training' | 'adjust' | 'stock' | 'cogs' | 'export'>('excel');
   
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   
@@ -590,7 +595,7 @@ export default function AdminTokoView({
       </div>
 
       {/* Navigation Tabs */}
-      <div className="grid grid-cols-2 md:grid-cols-7 gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
         <button
           onClick={() => setActiveTab('excel')}
           className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-black transition ${
@@ -613,6 +618,18 @@ export default function AdminTokoView({
         >
           <Edit2 className="w-4 h-4 text-amber-600" />
           Input Laporan Terlewat
+        </button>
+
+        <button
+          onClick={() => setActiveTab('training')}
+          className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-black transition cursor-pointer ${
+            activeTab === 'training'
+              ? 'bg-emerald-700 text-white shadow-md ring-2 ring-emerald-600/30'
+              : 'bg-emerald-50 text-emerald-950 border border-emerald-200 hover:bg-emerald-100'
+          }`}
+        >
+          <Cpu className="w-4 h-4 text-emerald-600" />
+          Training Dataset Prediksi Sales
         </button>
 
         <button
@@ -1188,6 +1205,26 @@ export default function AdminTokoView({
             onUpdateCogs={currentUser?.role === 'md' ? onUpdateCogs : undefined}
           />
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB: FILE HASIL TRAINING & SET MANUAL JUMLAH HARIAN                      */}
+      {/* ========================================================================= */}
+      {activeTab === 'training' && (
+        <AdminTrainingAndTargetView
+          currentUser={currentUser}
+          currentStore={currentStore}
+          selectedDate={selectedDate}
+          onSelectDate={setSelectedDate}
+          closingRecords={closingRecords}
+          items={items}
+          segments={segments}
+          adjustments={adjustments}
+          cogsList={cogsList}
+          onSaveClosingRecord={onSaveClosingRecord}
+          onDeleteClosingRecord={onDeleteClosingRecord}
+          onSalesPredictionUpdated={onUpdateSalesPrediction}
+        />
       )}
 
       {/* ========================================================================= */}
