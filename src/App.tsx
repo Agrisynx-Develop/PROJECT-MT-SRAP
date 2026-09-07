@@ -1940,6 +1940,7 @@ export default function App() {
               onSaveDailyReport={handleSaveDailyReport}
               onPurgeDate={handlePurgeDate}
               safeThawingLossPercent={lossConfig.safeThawingLossPercent}
+              onUpdateSalesPrediction={handleUpdateSalesPrediction}
             />
           )}
 
