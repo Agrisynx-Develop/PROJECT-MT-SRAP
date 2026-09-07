@@ -1018,42 +1018,42 @@ export default function AdminTokoView({
                       <option value="RAWON">RAWON</option>
                     </select>
                   </div>
-                  
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Pilih Rencana Potong / Nama Item
-                    </label>
-                    <select
-                      value={reportPlanName}
-                      onChange={(e) => {
-                        setReportPlanName(e.target.value);
-                        const std = STANDARD_PLANS.find((p) => p.name === e.target.value);
-                        if (std) setReportCategory(std.category);
-                      }}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500"
-                    >
-                      {STANDARD_PLANS.map((p) => (
-                        <option key={p.name} value={p.name}>
-                          {p.name} ({p.category})
-                        </option>
-                      ))}
-                      <option value="CUSTOM">-- Item Kustom Lainnya --</option>
-                    </select>
-                  </div>  
-                  
-                  {reportPlanName === 'CUSTOM' && (
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Ketik Nama Rencana Potong Kustom
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Contoh: TETELAN SPESIAL"
-                      onChange={(e) => setReportPlanName(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                    />
-                  </div>
-                )}
+                  <form onSubmit={handleSavePastClosing} className="space-y-3.5">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                        Pilih Rencana Potong / Nama Item
+                      </label>
+                      <select
+                        value={reportPlanName}
+                        onChange={(e) => {
+                          setReportPlanName(e.target.value);
+                          const std = STANDARD_PLANS.find((p) => p.name === e.target.value);
+                          if (std) setReportCategory(std.category);
+                        }}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                      >
+                        {STANDARD_PLANS.map((p) => (
+                          <option key={p.name} value={p.name}>
+                            {p.name} ({p.category})
+                          </option>
+                        ))}
+                        <option value="CUSTOM">-- Item Kustom Lainnya --</option>
+                      </select>
+                    </div>  
+                    
+                    {reportPlanName === 'CUSTOM' && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                        Ketik Nama Rencana Potong Kustom
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Contoh: TETELAN SPESIAL"
+                        onChange={(e) => setReportPlanName(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                      />
+                    </div>
+                  )}
                   
                 <div className="grid grid-cols-2 gap-3">
                   <div>
