@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ThawingItem, FabricationSegment, Store } from '../types';
+import { ThawingItem, FabricationSegment, Store, SalesTrainingRecord, SalesPredictionModelConfig } from '../types';
 import { predictDailySales } from '../utils/mlPrediction';
+import { getSalesTrainingDataset, getSalesPredictionConfig, saveSalesPredictionConfig, getPythonModels } from '../utils/db';
 import { processHighResImage } from '../utils/imageCompressor';
 import {
   calculateTotalShrinkage,
@@ -104,8 +105,28 @@ export default function Dashboard({
     return () => clearInterval(timer);
   }, []);
 
-  // Compute Machine Learning Sales Prediction automatically based on target date & historical items
-  const mlPrediction = predictDailySales(currentTime, items);
+  const storeId = currentStore?.id ? String(currentStore.id) : '1';
+  const [salesTrainingDataset, setSalesTrainingDataset] = useState<SalesTrainingRecord[]>(() =>
+    getSalesTrainingDataset(storeId)
+  );
+  const [salesModelConfig, setSalesModelConfig] = useState<SalesPredictionModelConfig>(() =>
+    getSalesPredictionConfig(storeId)
+  );
+
+  useEffect(() => {
+    setSalesTrainingDataset(getSalesTrainingDataset(storeId));
+    setSalesModelConfig(getSalesPredictionConfig(storeId));
+  }, [storeId]);
+
+  // Check active Python ML model
+  const activePythonModel = React.useMemo(() => {
+    const models = getPythonModels(storeId);
+    return models.find((m) => m.isActive) || null;
+  }, [storeId, salesModelConfig]);
+
+  // Compute Machine Learning Sales Prediction automatically based on target date, historical items, sales training dataset, and active Python model
+  const mlPrediction = predictDailySales(currentTime, items, salesTrainingDataset, salesModelConfig, activePythonModel);
+  const effectiveSalesPredictionKg = salesModelConfig.manualOverrideKg || salesPredictionKg || mlPrediction.predictedSalesKg;
 
   // Custom Categories state
   const [customCategories, setCustomCategories] = useState<string[]>(() => {
@@ -302,8 +323,31 @@ export default function Dashboard({
     const val = parseFloat(targetInput);
     if (!isNaN(val) && val > 0) {
       onUpdateSalesPrediction(val);
+      const updatedConfig: SalesPredictionModelConfig = {
+        ...salesModelConfig,
+        storeId,
+        manualOverrideKg: val,
+        manualOverrideDate: currentTime.toISOString().split('T')[0],
+        updatedAt: new Date().toISOString(),
+      };
+      setSalesModelConfig(updatedConfig);
+      saveSalesPredictionConfig(updatedConfig);
       setIsSalesModalOpen(false);
     }
+  };
+
+  const handleResetSalesTargetToML = () => {
+    const updatedConfig: SalesPredictionModelConfig = {
+      ...salesModelConfig,
+      storeId,
+      manualOverrideKg: undefined,
+      manualOverrideDate: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    setSalesModelConfig(updatedConfig);
+    saveSalesPredictionConfig(updatedConfig);
+    setTargetInput('');
+    setIsSalesModalOpen(false);
   };
 
   // Handle Add New Pabrikasi Category
@@ -499,8 +543,8 @@ export default function Dashboard({
   const totalWeightIssued = totalBahanAwalOverall;
 
   // Alert condition
-  const exceedsSalesPrediction = totalWeightIssued > salesPredictionKg;
-  const overageKg = Math.max(0, totalWeightIssued - salesPredictionKg);
+  const exceedsSalesPrediction = totalWeightIssued > effectiveSalesPredictionKg;
+  const overageKg = Math.max(0, totalWeightIssued - effectiveSalesPredictionKg);
 
   // Fabrication Segments total
   const totalProcessedSegmentsWeight = segments.reduce((sum, s) => sum + s.actualWeight, 0);
@@ -656,19 +700,21 @@ export default function Dashboard({
             <div className="mt-4">
               <div className="flex items-baseline gap-1">
                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">
-                  {salesPredictionKg.toFixed(1)}
+                  {effectiveSalesPredictionKg.toFixed(1)}
                 </h3>
                 <span className="text-sm font-bold text-slate-500">Kg</span>
               </div>
               <div className="mt-2.5 bg-slate-50 border border-slate-200/80 rounded-xl p-2 text-[11px] text-slate-600 space-y-1">
                 <div className="font-extrabold text-emerald-800 flex items-center justify-between">
-                  <span>🤖 {mlPrediction.dayCategory}</span>
+                  <span>🤖 {salesModelConfig.manualOverrideKg ? 'Manual Override Admin' : mlPrediction.dayCategory}</span>
                   <span className="font-mono text-[9px] bg-emerald-600 text-white px-1.5 py-0.2 rounded font-black">
-                    {mlPrediction.confidencePercent}% Acc
+                    {salesModelConfig.manualOverrideKg ? '100% Target' : `${mlPrediction.confidencePercent}% Acc`}
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-500 truncate">
-                  Faktor: {mlPrediction.dayTypeLabel} ({mlPrediction.totalMultiplier.toFixed(2)}x)
+                  {salesModelConfig.manualOverrideKg
+                    ? `Override aktif (${salesTrainingDataset.length} data training tersimpan)`
+                    : `Faktor: ${mlPrediction.dayTypeLabel} (${mlPrediction.totalMultiplier.toFixed(2)}x)`}
                 </p>
               </div>
             </div>
@@ -1076,19 +1122,28 @@ export default function Dashboard({
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-2">
+                <div className="flex flex-col sm:flex-row gap-2 pt-2">
                   <button
                     type="button"
                     onClick={() => setIsSalesModalOpen(false)}
-                    className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
+                    className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
                   >
                     Batal
                   </button>
+                  {salesModelConfig.manualOverrideKg && (
+                    <button
+                      type="button"
+                      onClick={handleResetSalesTargetToML}
+                      className="py-3 px-4 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold rounded-xl text-xs cursor-pointer"
+                    >
+                      Reset ke Otomatis ML ({mlPrediction.predictedSalesKg.toFixed(1)} Kg)
+                    </button>
+                  )}
                   <button
                     type="submit"
                     className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow-md cursor-pointer"
                   >
-                    Simpan Target
+                    Simpan Target Manual
                   </button>
                 </div>
               </form>
