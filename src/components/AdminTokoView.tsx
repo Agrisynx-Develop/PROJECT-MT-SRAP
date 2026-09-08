@@ -21,6 +21,7 @@ import {
   downloadCSV
 } from '../utils/excelExport';
 import { upsertRecordToSheets } from '../utils/sheetsApi';
+import { deduplicateThawingItems } from '../utils/db';
 
 export interface UnifiedBahanRow {
   id: string;
@@ -432,6 +433,20 @@ export default function AdminTokoView({
       (b) => b.bahan.trim() || (parseFloat(b.tally) || 0) > 0 || (parseFloat(b.netto) || 0) > 0
     );
 
+    // If updating or re-saving, find previous unified items for this plan and clean them up
+    const previousUnifiedItemIds = (items || [])
+      .filter(
+        (i) =>
+          matchStoreEntity(i.storeId, currentStore) &&
+          (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate) &&
+          isMatchPlan(i.plannedFabrication, effectivePlan)
+      )
+      .map((i) => i.id);
+
+    if (previousUnifiedItemIds.length > 0 && onDeleteItem) {
+      previousUnifiedItemIds.forEach((id) => onDeleteItem(id));
+    }
+
     const newlyAddedItems: ThawingItem[] = [];
 
     if (onAddItem && validBahan.length > 0) {
@@ -442,7 +457,7 @@ export default function AdminTokoView({
         const bLossPct = wBefore > 0 ? (bLossKg / wBefore) * 100 : 0;
 
         const newItem: ThawingItem = {
-          id: `meat_unified_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+          id: `meat_unified_${currentStore.id}_${selectedDate}_${idx}_${Date.now()}`,
           name: b.bahan.trim() || `Bahan ${effectivePlan}`,
           pabrikasiCategory: effectiveCategory,
           plannedFabrication: effectivePlan,
@@ -462,7 +477,6 @@ export default function AdminTokoView({
         };
 
         onAddItem(newItem);
-        upsertRecordToSheets('thawing_items', newItem);
         newlyAddedItems.push(newItem);
       });
     }
@@ -502,9 +516,12 @@ export default function AdminTokoView({
     const allClosingsForDate = [recordToSave, ...currentStoreClosings];
 
     const currentStoreItems = (items || []).filter(
-      (i) => matchStoreEntity(i.storeId, currentStore) && (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate)
+      (i) =>
+        matchStoreEntity(i.storeId, currentStore) &&
+        (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate) &&
+        !previousUnifiedItemIds.includes(i.id)
     );
-    const allItemsForDate = [...newlyAddedItems, ...currentStoreItems];
+    const allItemsForDate = deduplicateThawingItems([...newlyAddedItems, ...currentStoreItems]);
 
     const storeSegsForDate = (segments || []).filter(
       (s) => matchStoreEntity(s.storeId, currentStore) && (s.createdAt || s.transferTimestamp || '').startsWith(selectedDate)
@@ -521,29 +538,38 @@ export default function AdminTokoView({
     const carryoverOpening = allItemsForDate.filter((i) => i.isCarryover).reduce((s, i) => s + (i.weightBeforeThawing || 0), 0);
     const currentClosing = allClosingsForDate.reduce((s, c) => s + (c.actualClosingStockKg || 0), 0);
 
-    // Kumpulkan foto timbangan bahan dan closing fisik
+    // Kumpulkan foto tanpa duplikasi URL gambar
+    const seenPhotoUrls = new Set<string>();
     const allPhotos: any[] = [];
-    allClosingsForDate.filter((c) => c.photoUrl).forEach((c, idx) => {
-      allPhotos.push({
-        id: `photo_close_${c.id || idx}_${Date.now()}`,
-        url: c.photoUrl!,
-        caption: c.photoCaption || `Bukti Closing Fisik: ${c.planName}`,
-        category: 'Closing Stock',
-        uploadedAt: c.timestamp || new Date().toISOString(),
-      });
+    allClosingsForDate.filter((c) => c.photoUrl && c.photoUrl.trim() && c.photoUrl !== 'placeholder').forEach((c, idx) => {
+      const url = c.photoUrl!.trim();
+      if (!seenPhotoUrls.has(url)) {
+        seenPhotoUrls.add(url);
+        allPhotos.push({
+          id: `photo_close_${c.id || idx}`,
+          url,
+          caption: c.photoCaption || `Bukti Closing Fisik: ${c.planName}`,
+          category: 'Closing Stock',
+          uploadedAt: c.timestamp || new Date().toISOString(),
+        });
+      }
     });
-    allItemsForDate.filter((i) => i.image).forEach((i, idx) => {
-      allPhotos.push({
-        id: `photo_item_${i.id || idx}_${Date.now()}`,
-        url: i.image!,
-        caption: `Timbangan Bahan/Thaw: ${i.name} [${i.plannedFabrication || ''}]`,
-        category: 'Timbangan',
-        uploadedAt: i.createdAt || new Date().toISOString(),
-      });
+    allItemsForDate.filter((i) => i.image && i.image.trim() && i.image !== 'placeholder').forEach((i, idx) => {
+      const url = i.image!.trim();
+      if (!seenPhotoUrls.has(url)) {
+        seenPhotoUrls.add(url);
+        allPhotos.push({
+          id: `photo_item_${i.id || idx}`,
+          url,
+          caption: `Timbangan Bahan/Thaw: ${i.name} [${i.plannedFabrication || ''}]`,
+          category: 'Timbangan',
+          uploadedAt: i.createdAt || new Date().toISOString(),
+        });
+      }
     });
 
     const finalizedReport: DailyClosingReport = {
-      id: `rep_unified_${currentStore.id}_${selectedDate}_${Date.now()}`,
+      id: `rep_${currentStore.id}_${selectedDate}`,
       storeId: currentStore.id,
       storeName: currentStore.name,
       date: selectedDate,
@@ -1572,13 +1598,13 @@ export default function AdminTokoView({
                   {/* Susut Proses */}
                   <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase">
-                      Susut Proses
+                      Susut Proses (Tally - Netto)
                     </span>
                     <span className="text-base sm:text-lg font-mono font-black text-amber-300 block mt-0.5">
                       {susutProsesKg.toFixed(3)} <span className="text-xs text-slate-400">Kg</span>
                     </span>
                     <span className="text-[10px] text-amber-400/90 block mt-1 font-bold">
-                      {susutProsesPct.toFixed(2)}% dari total tally
+                      {susutProsesPct.toFixed(2)}% dari total tally ({totalTally.toFixed(3)} Kg)
                     </span>
                   </div>
 
