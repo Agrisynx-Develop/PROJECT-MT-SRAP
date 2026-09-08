@@ -567,9 +567,11 @@ export default function App() {
       butcherName: currentUser?.fullName || 'Petugas Butcher',
       isCarryover: newItem.isCarryover || false,
     };
-    const updated = deduplicateThawingItems([item, ...items]);
-    setItems(updated);
-    saveThawingItems(updated, item);
+    setItems((prev) => {
+      const updated = deduplicateThawingItems([item, ...prev]);
+      saveThawingItems(updated, item);
+      return updated;
+    });
 
     // Sync to backend immediately
     fetch('/api/thawing-items', {
@@ -577,6 +579,47 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     }).catch(console.error);
+  };
+
+  // Handler: Batch Add Items (guarantees multiple items are added without closure overwrite)
+  const handleAddItems = (newItemsList: Array<Omit<ThawingItem, 'id' | 'status' | 'thawingStartTime' | 'createdAt' | 'butcherId' | 'butcherName'> & {
+    id?: string;
+    createdAt?: string;
+    status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
+    thawingStartTime?: string;
+    storeId?: string;
+  }>) => {
+    if (!newItemsList || newItemsList.length === 0) return;
+    const now = new Date();
+    const effectiveStoreId = currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const preparedItems: ThawingItem[] = newItemsList.map((newItem, idx) => {
+      const createdAtTime = newItem.createdAt || now.toISOString();
+      const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
+      return {
+        ...newItem,
+        id: itemId,
+        storeId: newItem.storeId || effectiveStoreId,
+        status: newItem.status || 'thawing',
+        thawingStartTime: newItem.thawingStartTime || createdAtTime,
+        createdAt: createdAtTime,
+        butcherName: currentUser?.fullName || 'Petugas Butcher',
+        isCarryover: newItem.isCarryover || false,
+      };
+    });
+
+    setItems((prev) => {
+      const updated = deduplicateThawingItems([...preparedItems, ...prev]);
+      saveThawingItems(updated);
+      return updated;
+    });
+
+    preparedItems.forEach((item) => {
+      fetch('/api/thawing-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item)
+      }).catch(console.error);
+    });
   };
 
   // Handler: Update Item
@@ -849,7 +892,8 @@ export default function App() {
     const carryoverOpening = storeItms.filter((i) => i.isCarryover).reduce((s, i) => s + i.weightBeforeThawing, 0);
     const currentClosing = storeClosings.reduce((s, c) => s + (c.actualClosingStockKg || 0), 0);
     const totalThawLoss = Math.max(0, totalRaw - totalThawed);
-    const totalFabLoss = Math.max(0, totalThawed - totalFab);
+    const totalFabLoss = (storeSegs.length > 0 && totalFab > 0) ? Math.max(0, totalThawed - totalFab) : 0;
+    const totalProcessLoss = totalThawLoss + totalFabLoss;
     const totalSusutJual = storeClosings.reduce((s, c) => s + (c.susutJualKg || 0), 0);
 
     const closedReport: DailyClosingReport = {
@@ -864,12 +908,12 @@ export default function App() {
       totalWeightAfterFabrication: totalFab,
       totalThawingLoss: totalThawLoss,
       totalFabricationLoss: totalFabLoss,
-      totalProcessLoss: totalThawLoss + totalFabLoss,
+      totalProcessLoss: totalProcessLoss,
       totalSusutJual: totalSusutJual,
       totalSalesKg: totalSales,
       carryoverOpeningStockKg: carryoverOpening,
       currentClosingStockKg: currentClosing,
-      financialLossRupiah: (totalThawLoss + totalFabLoss + totalSusutJual) * 102000,
+      financialLossRupiah: (totalProcessLoss + totalSusutJual) * 102000,
       butcherInCharge: currentUser?.fullName || 'Petugas Butcher',
       adminInCharge: currentUser?.role === 'admin' ? currentUser.fullName : undefined,
       isClosed: true,
@@ -1011,7 +1055,7 @@ export default function App() {
   const handleSaveDailyReport = (report: DailyClosingReport) => {
     // If a report already exists for the same store and date, replace it to avoid duplicates
     const filtered = reports.filter(
-      (r) => !(r.date === report.date && ((r.storeId && report.storeId && r.storeId === report.storeId) || (!r.storeId && !report.storeId)))
+      (r) => !(r.date === report.date && matchStoreEntity(r.storeId, currentStore || { id: report.storeId }))
     );
     const updated = [report, ...filtered];
     setReports(updated);
@@ -2006,6 +2050,7 @@ export default function App() {
               onDeleteClosingRecord={handleDeleteClosingRecord}
               onSaveClosingRecord={handleSaveClosingRecord}
               onAddItem={handleAddItem}
+              onAddItems={handleAddItems}
               onDeleteItem={handleDeleteItem}
               onSaveDailyReport={handleSaveDailyReport}
               onPurgeDate={handlePurgeDate}
