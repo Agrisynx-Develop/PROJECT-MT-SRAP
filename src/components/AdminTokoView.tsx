@@ -7,7 +7,8 @@ import {
   CogsMaster,
   UserAccount,
   Store,
-  DailyClosingReport
+  DailyClosingReport,
+  ReportPhotoAttachment
 } from '../types';
 import ExcelReportViewer from './ExcelReportViewer';
 import AdminTrainingAndTargetView from './AdminTrainingAndTargetView';
@@ -86,6 +87,7 @@ interface AdminTokoViewProps {
   onDeleteClosingRecord?: (id: string) => void;
   onSaveClosingRecord?: (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string }) => void;
   onAddItem?: (newItem: Omit<ThawingItem, 'id' | 'createdAt' | 'butcherId' | 'butcherName'> & { createdAt?: string }) => void;
+  onAddItems?: (newItems: Array<Omit<ThawingItem, 'id' | 'createdAt' | 'butcherId' | 'butcherName'> & { createdAt?: string }>) => void;
   onDeleteItem?: (id: string) => void;
   onSaveDailyReport?: (report: DailyClosingReport) => void;
   onPurgeDate?: (date: string) => void;
@@ -110,6 +112,7 @@ export default function AdminTokoView({
   onDeleteClosingRecord,
   onSaveClosingRecord,
   onAddItem,
+  onAddItems,
   onDeleteItem,
   onSaveDailyReport,
   onPurgeDate,
@@ -449,7 +452,7 @@ export default function AdminTokoView({
 
     const newlyAddedItems: ThawingItem[] = [];
 
-    if (onAddItem && validBahan.length > 0) {
+    if (validBahan.length > 0) {
       validBahan.forEach((b, idx) => {
         const wBefore = parseFloat(b.tally) || 0;
         const wAfter = parseFloat(b.netto) || wBefore;
@@ -458,7 +461,7 @@ export default function AdminTokoView({
 
         const newItem: ThawingItem = {
           id: `meat_unified_${currentStore.id}_${selectedDate}_${idx}_${Date.now()}`,
-          name: b.bahan.trim() || `Bahan ${effectivePlan}`,
+          name: b.bahan.trim() || `Bahan ${effectivePlan} ${idx + 1}`,
           pabrikasiCategory: effectiveCategory,
           plannedFabrication: effectivePlan,
           weightBeforeThawing: wBefore,
@@ -476,9 +479,14 @@ export default function AdminTokoView({
           butcherName: `${currentUser.fullName} (Input Terpadu)`,
         };
 
-        onAddItem(newItem);
         newlyAddedItems.push(newItem);
       });
+
+      if (onAddItems) {
+        onAddItems(newlyAddedItems);
+      } else if (onAddItem) {
+        newlyAddedItems.forEach((it) => onAddItem(it));
+      }
     }
 
     // 2. Simpan Data Closing Fisik Rencana Potong
@@ -531,16 +539,31 @@ export default function AdminTokoView({
     const totalThawed = allItemsForDate.filter((i) => !i.isCarryover).reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0);
     const totalFab = storeSegsForDate.reduce((s, seg) => s + seg.actualWeight, 0);
     const totalThawLoss = Math.max(0, totalRaw - totalThawed);
-    const totalFabLoss = Math.max(0, totalThawed - totalFab);
+    // CRITICAL: Susut proses adalah strictly Tally - Netto jika tidak ada segmen pabrikasi terpisah
+    const totalFabLoss = (storeSegsForDate.length > 0 && totalFab > 0) ? Math.max(0, totalThawed - totalFab) : 0;
     const allProcessLoss = totalThawLoss + totalFabLoss;
     const allSusutJual = allClosingsForDate.reduce((s, c) => s + (c.susutJualKg || 0), 0);
     const totalSales = allClosingsForDate.reduce((s, c) => s + (c.salesKg || 0), 0) + storeSegsForDate.reduce((s, seg) => s + (seg.salesKg || 0), 0);
     const carryoverOpening = allItemsForDate.filter((i) => i.isCarryover).reduce((s, i) => s + (i.weightBeforeThawing || 0), 0);
     const currentClosing = allClosingsForDate.reduce((s, c) => s + (c.actualClosingStockKg || 0), 0);
 
-    // Kumpulkan foto tanpa duplikasi URL gambar
+    // Kumpulkan seluruh foto (Bahan-bahan + Closing Fisik) tanpa duplikasi URL gambar
     const seenPhotoUrls = new Set<string>();
-    const allPhotos: any[] = [];
+    const allPhotos: ReportPhotoAttachment[] = [];
+
+    // A. Foto Closing Fisik
+    if (unifiedFotoClosing && unifiedFotoClosing.trim() && unifiedFotoClosing !== 'placeholder') {
+      const url = unifiedFotoClosing.trim();
+      seenPhotoUrls.add(url);
+      allPhotos.push({
+        id: `photo_close_unified_${Date.now()}`,
+        url,
+        caption: `Bukti Closing Fisik: ${effectivePlan} (${sisaFisikNum.toFixed(2)} Kg)`,
+        category: 'Closing Stock',
+        uploadedAt: `${selectedDate}T17:00:00.000Z`,
+      });
+    }
+
     allClosingsForDate.filter((c) => c.photoUrl && c.photoUrl.trim() && c.photoUrl !== 'placeholder').forEach((c, idx) => {
       const url = c.photoUrl!.trim();
       if (!seenPhotoUrls.has(url)) {
@@ -554,6 +577,27 @@ export default function AdminTokoView({
         });
       }
     });
+
+    // B. Foto Bahan yang diinput langsung dari baris validBahan
+    validBahan.forEach((b, idx) => {
+      if (b.foto && b.foto.trim() && b.foto !== 'placeholder') {
+        const url = b.foto.trim();
+        if (!seenPhotoUrls.has(url)) {
+          seenPhotoUrls.add(url);
+          const tallyVal = parseFloat(b.tally) || 0;
+          const nettoVal = parseFloat(b.netto) || tallyVal;
+          allPhotos.push({
+            id: `photo_bahan_${b.id || idx}_${Date.now()}`,
+            url,
+            caption: `Timbangan Raw/Thawing: ${b.bahan.trim() || `Bahan ${effectivePlan}`} (${tallyVal.toFixed(2)} Kg) | Thawing: ${nettoVal.toFixed(2)} Kg [${effectivePlan}]`,
+            category: 'Timbangan',
+            uploadedAt: timestampStr,
+          });
+        }
+      }
+    });
+
+    // C. Foto dari allItemsForDate
     allItemsForDate.filter((i) => i.image && i.image.trim() && i.image !== 'placeholder').forEach((i, idx) => {
       const url = i.image!.trim();
       if (!seenPhotoUrls.has(url)) {
@@ -561,7 +605,7 @@ export default function AdminTokoView({
         allPhotos.push({
           id: `photo_item_${i.id || idx}`,
           url,
-          caption: `Timbangan Bahan/Thaw: ${i.name} [${i.plannedFabrication || ''}]`,
+          caption: `Timbangan Raw/Thawing: ${i.name} (${(i.weightBeforeThawing || 0).toFixed(2)} Kg) | Thawing: ${(i.weightAfterThawing || i.weightBeforeThawing || 0).toFixed(2)} Kg [${i.plannedFabrication || ''}]`,
           category: 'Timbangan',
           uploadedAt: i.createdAt || new Date().toISOString(),
         });
@@ -591,6 +635,7 @@ export default function AdminTokoView({
       isClosed: true,
       closedAt: new Date().toISOString(),
       closingPlanRecords: allClosingsForDate,
+      closingPhotoUrl: unifiedFotoClosing || recordToSave.photoUrl || undefined,
       itemsProcessed: allItemsForDate.map((i) => ({
         id: i.id,
         name: i.name,
@@ -602,6 +647,8 @@ export default function AdminTokoView({
         thawingLossPercent: i.shrinkageThawingPercent || 0,
         fabLossPercent: 0,
         salesKg: i.salesKg || 0,
+        image: i.image,
+        photoUrl: i.image,
         openingStockKg: i.isCarryover ? i.weightBeforeThawing : 0,
         isCarryover: i.isCarryover,
       })),
@@ -735,7 +782,8 @@ export default function AdminTokoView({
     const carryoverOpening = storeItemsForDate.filter((i) => i.isCarryover).reduce((s, i) => s + i.weightBeforeThawing, 0);
     const currentClosing = storeClosingsForDate.reduce((s, c) => s + (c.actualClosingStockKg || 0), 0);
     const totalThawLoss = Math.max(0, totalRaw - totalThawed);
-    const totalFabLoss = Math.max(0, totalThawed - totalFab);
+    const totalFabLoss = (storeSegsForDate.length > 0 && totalFab > 0) ? Math.max(0, totalThawed - totalFab) : 0;
+    const totalProcessLoss = totalThawLoss + totalFabLoss;
     const totalSusutJual = storeClosingsForDate.reduce((s, c) => s + (c.susutJualKg || 0), 0);
 
     const report: DailyClosingReport = {
@@ -750,12 +798,12 @@ export default function AdminTokoView({
       totalWeightAfterFabrication: totalFab,
       totalThawingLoss: totalThawLoss,
       totalFabricationLoss: totalFabLoss,
-      totalProcessLoss: totalThawLoss + totalFabLoss,
+      totalProcessLoss: totalProcessLoss,
       totalSusutJual: totalSusutJual,
       totalSalesKg: totalSales,
       carryoverOpeningStockKg: carryoverOpening,
       currentClosingStockKg: currentClosing,
-      financialLossRupiah: (totalThawLoss + totalFabLoss + totalSusutJual) * 102000,
+      financialLossRupiah: (totalProcessLoss + totalSusutJual) * 102000,
       butcherInCharge: 'Petugas Butcher',
       adminInCharge: currentUser.fullName,
       isClosed: true,
