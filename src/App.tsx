@@ -39,6 +39,8 @@ import {
   resetDatabase,
   pullAllDataFromGoogleSheets,
   deleteThawingItemFromCloud,
+  deduplicateThawingItems,
+  deduplicateDailyReports,
 } from './utils/db';
 import {
   getGoogleAppsScriptUrl,
@@ -181,7 +183,7 @@ export default function App() {
           }
           if (d.users && d.users.length > 0) setUsers(d.users);
           if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
-          if (d.thawingItems) setItems((d.thawingItems || []).filter((i: any) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'));
+          if (d.thawingItems) setItems(deduplicateThawingItems((d.thawingItems || []).filter((i: any) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29')));
           if (d.fabricationSegments) setSegments((d.fabricationSegments || []).filter((s: any) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== '2026-08-29'));
           if (d.closingPlanRecords) {
             const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
@@ -260,7 +262,7 @@ export default function App() {
               saveClosingPlanRecords(filteredMerged);
             }
           }
-          if (d.dailyClosingReports) setReports((d.dailyClosingReports || []).filter((r: any) => (r.date || '').split('T')[0] !== '2026-08-29'));
+          if (d.dailyClosingReports) setReports(deduplicateDailyReports((d.dailyClosingReports || []).filter((r: any) => (r.date || '').split('T')[0] !== '2026-08-29')));
           if (d.stockAdjustments) setAdjustments((d.stockAdjustments || []).filter((a: any) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'));
           if (d.lossConfig) setLossConfig(d.lossConfig);
           setLastCloudSync(new Date().toISOString());
@@ -321,9 +323,9 @@ export default function App() {
 
       if (resItems && resItems.ok) {
         const data = await resItems.json();
-        if (Array.isArray(data)) setItems(data);
+        if (Array.isArray(data)) setItems(deduplicateThawingItems(data));
       } else {
-        setItems(getThawingItems());
+        setItems(deduplicateThawingItems(getThawingItems()));
       }
 
       if (resSegs && resSegs.ok) {
@@ -410,9 +412,9 @@ export default function App() {
 
       if (resReps && resReps.ok) {
         const data = await resReps.json();
-        if (Array.isArray(data)) setReports(data);
+        if (Array.isArray(data)) setReports(deduplicateDailyReports(data));
       } else {
-        setReports(getDailyReports());
+        setReports(deduplicateDailyReports(getDailyReports()));
       }
 
       setLossConfig(getLossConfig());
@@ -423,9 +425,9 @@ export default function App() {
       setCogsList(getCogsMaster());
       setAdjustments(getStockAdjustments());
       setClosingRecords(getClosingPlanRecords());
-      setItems(getThawingItems());
+      setItems(deduplicateThawingItems(getThawingItems()));
       setSegments(getFabricationSegments());
-      setReports(getDailyReports());
+      setReports(deduplicateDailyReports(getDailyReports()));
       setLossConfig(getLossConfig());
     } finally {
       setIsCloudSyncing(false);
@@ -544,6 +546,7 @@ export default function App() {
   // Handler: Add Item for Thawing
   const handleAddItem = (
     newItem: Omit<ThawingItem, 'id' | 'status' | 'thawingStartTime' | 'createdAt' | 'butcherId' | 'butcherName'> & {
+      id?: string;
       createdAt?: string;
       status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
       thawingStartTime?: string;
@@ -553,9 +556,10 @@ export default function App() {
     const now = new Date();
     const effectiveStoreId = newItem.storeId || currentStore?.id || currentUser?.storeId || 'store_ckr';
     const createdAtTime = newItem.createdAt || now.toISOString();
+    const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const item: ThawingItem = {
       ...newItem,
-      id: `meat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: itemId,
       storeId: effectiveStoreId,
       status: newItem.status || 'thawing',
       thawingStartTime: newItem.thawingStartTime || createdAtTime,
@@ -563,12 +567,11 @@ export default function App() {
       butcherName: currentUser?.fullName || 'Petugas Butcher',
       isCarryover: newItem.isCarryover || false,
     };
-    const updated = [item, ...items];
+    const updated = deduplicateThawingItems([item, ...items]);
     setItems(updated);
-    saveThawingItems(updated);
+    saveThawingItems(updated, item);
 
-    // Sync to backend & Google Sheets immediately upon completion
-    upsertRecordToSheets('thawing_items', item);
+    // Sync to backend immediately
     fetch('/api/thawing-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
