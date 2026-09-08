@@ -265,6 +265,21 @@ export async function upsertRecordToSheets(table: string, record: any): Promise<
     if (safeRecord.photoUrl && typeof safeRecord.photoUrl === 'string' && safeRecord.photoUrl.length > 35000) {
       safeRecord.photoUrl = await ensureCloudSafeImage(safeRecord.photoUrl, 35000);
     }
+    if (safeRecord.image && typeof safeRecord.image === 'string' && safeRecord.image.length > 35000) {
+      safeRecord.image = await ensureCloudSafeImage(safeRecord.image, 35000);
+    }
+
+    // Normalization for Laporan_Closing across Google Spreadsheet variations
+    if (normTable === 'Laporan_Closing') {
+      safeRecord.totalWeightRaw = safeRecord.totalWeightBeforeThawing ?? safeRecord.totalWeightRaw ?? 0;
+      safeRecord.totalSales = safeRecord.totalSalesKg ?? safeRecord.totalSales ?? 0;
+      safeRecord.totalEndStock = safeRecord.currentClosingStockKg ?? safeRecord.totalEndStock ?? 0;
+      safeRecord.totalPeriodicShrinkage = safeRecord.totalProcessLoss ?? safeRecord.totalPeriodicShrinkage ?? 0;
+      safeRecord.butcherName = safeRecord.butcherInCharge || safeRecord.adminInCharge || safeRecord.butcherName || '';
+      if (Array.isArray(safeRecord.photos) && safeRecord.photos.length > 0 && !safeRecord.closingPhotoUrl) {
+        safeRecord.closingPhotoUrl = safeRecord.photos[0]?.url || '';
+      }
+    }
   }
 
   return postToSheets({
