@@ -11,9 +11,10 @@ import {
 } from '../types';
 import ExcelReportViewer from './ExcelReportViewer';
 import AdminTrainingAndTargetView from './AdminTrainingAndTargetView';
+import SavedDataViewerModal from './SavedDataViewerModal';
 import { matchStoreEntity } from '../utils/reportCalculations';
 import { processHighResImage } from '../utils/imageCompressor';
-import { getDeterministicClosingRecordId } from '../utils/storeHelper';
+import { getDeterministicClosingRecordId, isMatchPlan } from '../utils/storeHelper';
 import {
   exportStoreDailyLaporanExcel,
   exportStoreDailyLaporanCSV,
@@ -67,6 +68,7 @@ import {
   X,
   ZoomIn,
   Beef,
+  Database,
 } from 'lucide-react';
 
 interface AdminTokoViewProps {
@@ -77,6 +79,7 @@ interface AdminTokoViewProps {
   closingRecords: ClosingPlanRecord[];
   adjustments: StockAdjustment[];
   cogsList: CogsMaster[];
+  reports?: DailyClosingReport[];
   onAddAdjustment: (adj: Omit<StockAdjustment, 'id' | 'createdAt'>) => void;
   onDeleteAdjustment?: (id: string) => void;
   onDeleteClosingRecord?: (id: string) => void;
@@ -100,6 +103,7 @@ export default function AdminTokoView({
   closingRecords,
   adjustments,
   cogsList,
+  reports = [],
   onAddAdjustment,
   onDeleteAdjustment,
   onDeleteClosingRecord,
@@ -115,6 +119,7 @@ export default function AdminTokoView({
   onUpdateSalesPrediction,
 }: AdminTokoViewProps) {
   const [activeTab, setActiveTab] = useState<'excel' | 'overview' | 'input_laporan' | 'training' | 'adjust' | 'stock' | 'cogs' | 'export'>('excel');
+  const [isSavedDataModalOpen, setIsSavedDataModalOpen] = useState(false);
   
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   
@@ -597,6 +602,53 @@ export default function AdminTokoView({
     setUnifiedNotes('');
   };
 
+  // Handle Edit Closing Record from Saved Data Modal
+  const handleEditClosing = (rec: ClosingPlanRecord) => {
+    setActiveTab('input_laporan');
+    if (rec.date) {
+      setSelectedDate(rec.date.split('T')[0]);
+    }
+    setEditingClosingId(rec.id);
+
+    // Check if plan matches standard plans
+    const standardMatch = STANDARD_PLANS.find((p) => isMatchPlan(p.name, rec.planName));
+    if (standardMatch) {
+      setUnifiedPlanSelect(standardMatch.name);
+      setUnifiedCustomPlan('');
+      setUnifiedCategory(standardMatch.category);
+    } else {
+      setUnifiedPlanSelect('CUSTOM');
+      setUnifiedCustomPlan(rec.planName);
+      setUnifiedCategory(rec.category || 'DAGING FRESH');
+    }
+
+    setUnifiedSisaKemarin(rec.openingStockKg !== undefined ? String(rec.openingStockKg) : '');
+    setUnifiedPenjualanSales(rec.salesKg !== undefined ? String(rec.salesKg) : '');
+    setUnifiedTimbanganSisaFisik(rec.actualClosingStockKg !== undefined ? String(rec.actualClosingStockKg) : '');
+    setUnifiedFotoClosing(rec.photoUrl || '');
+    setUnifiedNotes(rec.note || '');
+
+    // Load related items if any
+    const relatedItems = (items || []).filter(
+      (i) =>
+        matchStoreEntity(i.storeId, currentStore) &&
+        isMatchPlan(i.plannedFabrication, rec.planName) &&
+        (rec.date ? (i.createdAt || i.thawingStartTime || '').startsWith(rec.date.split('T')[0]) : true)
+    );
+
+    if (relatedItems.length > 0) {
+      setUnifiedBahanList(
+        relatedItems.map((item, idx) => ({
+          id: item.id || `b_${Date.now()}_${idx}`,
+          bahan: item.name || '',
+          tally: String(item.weightBeforeThawing || ''),
+          netto: String(item.weightAfterThawing || item.weightBeforeThawing || ''),
+          foto: item.image || '',
+        }))
+      );
+    }
+  };
+
   // Delete Closing Record with Undo
   const handleDeleteClosingWithUndo = (rec: ClosingPlanRecord) => {
     if (window.confirm(`Hapus data closing "${rec.planName}" tanggal ${rec.date || selectedDate}?`)) {
@@ -813,6 +865,15 @@ export default function AdminTokoView({
             </button>
           )}
           <button
+            type="button"
+            onClick={() => setIsSavedDataModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs shadow transition active:scale-95 cursor-pointer"
+            title="Buka Window / Jendela Data Tersimpan di Database"
+          >
+            <Database className="w-4 h-4 text-indigo-200" />
+            Window Data Tersimpan
+          </button>
+          <button
             onClick={handleExportExcel}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow transition active:scale-95"
             title="Download Format Excel persis LAPORAN DAGING 02 AGUSTUS 2026.xlsx"
@@ -987,16 +1048,27 @@ export default function AdminTokoView({
                 </p>
               </div>
 
-              {/* Date Selection Widget */}
-              <div className="flex items-center gap-2 bg-amber-50 p-2 rounded-xl border border-amber-200">
-                <Calendar className="w-4 h-4 text-amber-700" />
-                <span className="text-xs font-bold text-amber-950">Tanggal Laporan:</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg text-xs font-black text-slate-900 focus:ring-2 focus:ring-amber-500"
-                />
+              {/* Actions & Date Selection Widget */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setIsSavedDataModalOpen(true)}
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95 cursor-pointer"
+                  title="Buka Window Data Tersimpan"
+                >
+                  <Database className="w-4 h-4 text-indigo-200" />
+                  Window Data Tersimpan
+                </button>
+                <div className="flex items-center gap-2 bg-amber-50 p-2 rounded-xl border border-amber-200">
+                  <Calendar className="w-4 h-4 text-amber-700" />
+                  <span className="text-xs font-bold text-amber-950">Tanggal Laporan:</span>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg text-xs font-black text-slate-900 focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -2239,6 +2311,20 @@ export default function AdminTokoView({
           </div>
         </div>
       )}
+      {/* WINDOW / MODAL UNTUK MENAMPILKAN DATA TERSIMPAN */}
+      <SavedDataViewerModal
+        isOpen={isSavedDataModalOpen}
+        onClose={() => setIsSavedDataModalOpen(false)}
+        currentStore={currentStore}
+        currentUser={currentUser}
+        closingRecords={closingRecords}
+        items={items}
+        reports={reports}
+        initialDate={selectedDate}
+        onEditClosingRecord={handleEditClosing}
+        onDeleteClosingRecord={onDeleteClosingRecord}
+        onDeleteItem={onDeleteItem}
+      />
     </div>
   );
 }
