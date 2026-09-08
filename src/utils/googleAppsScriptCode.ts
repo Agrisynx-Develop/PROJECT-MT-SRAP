@@ -335,9 +335,16 @@ function readTableData(ss, sheetName) {
       if (!headerKey) continue;
       var rawVal = rowData[h];
 
-      // Format Date objects to ISO string
+      // Format Date objects to ISO string or YYYY-MM-DD
       if (rawVal instanceof Date) {
-        rawVal = rawVal.toISOString();
+        var y = rawVal.getFullYear();
+        var m = ('0' + (rawVal.getMonth() + 1)).slice(-2);
+        var d = ('0' + rawVal.getDate()).slice(-2);
+        if (headerKey.toLowerCase() === 'date') {
+          rawVal = y + '-' + m + '-' + d;
+        } else {
+          rawVal = rawVal.toISOString();
+        }
       }
       
       // Parse Booleans if stored as string
@@ -420,6 +427,28 @@ function writeTableData(ss, sheetName, items, customHeaders) {
 }
 
 /**
+ * Helper to extract YYYY-MM-DD from string or Date
+ */
+function extractYMD(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    var y = val.getFullYear();
+    var m = ('0' + (val.getMonth() + 1)).slice(-2);
+    var d = ('0' + val.getDate()).slice(-2);
+    return y + '-' + m + '-' + d;
+  }
+  var s = String(val).trim();
+  var match = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return match[1] + '-' + match[2] + '-' + match[3];
+  return s.split('T')[0];
+}
+
+function normalizePlanGAS(str) {
+  if (!str) return '';
+  return String(str).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
  * Atomic Upsert of a single record by ID without replacing the whole sheet
  */
 function upsertSingleRecord(ss, sheetName, record) {
@@ -436,30 +465,45 @@ function upsertSingleRecord(ss, sheetName, record) {
   var dateColIdx = headers.indexOf('date');
 
   var rowIndexToUpdate = -1;
-  for (var r = 1; r < values.length; r++) {
-    var rowId = String(values[r][idColIdx] || '');
-    var rowStore = storeColIdx >= 0 ? String(values[r][storeColIdx] || '') : '';
-    var rowPlan = planColIdx >= 0 ? String(values[r][planColIdx] || '') : '';
-    var rowDate = dateColIdx >= 0 ? String(values[r][dateColIdx] || '') : '';
+  var targetId = record.id ? String(record.id).trim() : '';
+  var targetYMD = extractYMD(record.date || record.timestamp);
+  var targetNormPlan = normalizePlanGAS(record.planName);
 
-    if (record.id && rowId === String(record.id)) {
+  for (var r = 1; r < values.length; r++) {
+    var rowId = String(values[r][idColIdx] || '').trim();
+    var rowStore = storeColIdx >= 0 ? String(values[r][storeColIdx] || '').trim() : '';
+    var rowPlan = planColIdx >= 0 ? String(values[r][planColIdx] || '').trim() : '';
+    var rowDate = dateColIdx >= 0 ? values[r][dateColIdx] : '';
+
+    if (targetId && rowId === targetId) {
       rowIndexToUpdate = r + 1; // 1-based index
       break;
     }
-    // For Closing_Fisik, also match by store + plan + date
-    if (sheetName === 'Closing_Fisik' && record.planName && rowStore === String(record.storeId) && rowPlan.toLowerCase() === String(record.planName).toLowerCase() && (!record.date || !rowDate || rowDate === String(record.date))) {
-      rowIndexToUpdate = r + 1;
-      break;
+    // For Closing_Fisik, also match by store + normalized plan + YYYY-MM-DD date
+    if (sheetName === 'Closing_Fisik' && targetNormPlan) {
+      var rowNormPlan = normalizePlanGAS(rowPlan);
+      var rowYMD = extractYMD(rowDate);
+      var storeMatches = !record.storeId || !rowStore || rowStore === String(record.storeId).trim();
+
+      if (storeMatches && rowNormPlan === targetNormPlan) {
+        if (!targetYMD || !rowYMD || rowYMD === targetYMD) {
+          rowIndexToUpdate = r + 1;
+          break;
+        }
+      }
     }
   }
 
   var rowData = [];
   for (var h = 0; h < headers.length; h++) {
-    var val = record[headers[h]];
+    var key = headers[h];
+    var val = record[key];
     if (val === undefined || val === null) {
       val = '';
     } else if (typeof val === 'boolean') {
       val = val ? 'YA' : 'TIDAK';
+    } else if (key === 'date' && val) {
+      val = extractYMD(val) || String(val);
     } else if (typeof val === 'string' && val.length > 48000) {
       val = val.substring(0, 48000);
     }
