@@ -8,7 +8,8 @@ import {
   Store
 } from '../types';
 import { processHighResImage, ensureCloudSafeImage } from '../utils/imageCompressor';
-import { isMatchPlan } from '../utils/storeHelper';
+import { isMatchPlan, getDeterministicClosingRecordId } from '../utils/storeHelper';
+import SavedDataViewerModal from './SavedDataViewerModal';
 import {
   CheckSquare,
   Scale,
@@ -31,7 +32,8 @@ import {
   Building2,
   RotateCcw,
   Trash2,
-  Calendar
+  Calendar,
+  Database
 } from 'lucide-react';
 
 interface ButcherClosingViewProps {
@@ -45,7 +47,7 @@ interface ButcherClosingViewProps {
   adjustments?: StockAdjustment[];
   closingRecords?: ClosingPlanRecord[];
   existingClosingRecords?: ClosingPlanRecord[];
-  onSaveClosingRecord: (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string }) => void;
+  onSaveClosingRecord: (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string; timestamp?: string }) => void;
   onDeleteClosingRecord?: (id: string) => void;
   onDailyResetAndCarryover?: () => void;
   onManualSync?: () => void;
@@ -79,6 +81,16 @@ export default function ButcherClosingView({
   // Closing date selection (defaults to today, but can be set to past dates)
   const [closingDate, setClosingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [undoToast, setUndoToast] = useState<{ record: ClosingPlanRecord; planName: string } | null>(null);
+  const [isSavedDataModalOpen, setIsSavedDataModalOpen] = useState(false);
+
+  // Date-aware record lookup: ensures reports from past dates (Laporan Terlewat) don't collide with today's closing
+  const getRecordForPlan = (planName: string, targetDate: string = closingDate): ClosingPlanRecord | undefined => {
+    return records.find(
+      (r) =>
+        isPlanMatch(r.planName, planName) &&
+        ((r.date || r.timestamp || '').split('T')[0] === targetDate)
+    );
+  };
 
   // Standard Rencana Potong list
   const STANDARD_PLANS = [
@@ -141,7 +153,7 @@ export default function ButcherClosingView({
 
   // Handle opening active input modal for an unlocked plan or for editing
   const handleOpenClosingModal = (planObj: typeof STANDARD_PLANS[0], existingRecordToEdit?: ClosingPlanRecord) => {
-    const existingRec = existingRecordToEdit || records.find((r) => isPlanMatch(r.planName, planObj.name));
+    const existingRec = existingRecordToEdit || getRecordForPlan(planObj.name);
 
     setSelectedPlan(planObj);
     if (existingRec) {
@@ -253,7 +265,7 @@ export default function ButcherClosingView({
     const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
     const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
-    const existingRec = records.find((r) => isPlanMatch(r.planName, selectedPlan.name));
+    const existingRec = getRecordForPlan(selectedPlan.name, closingDate);
     const openingStockKg = (carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0)) || (existingRec ? (Number(existingRec.openingStockKg) || 0) : 0);
     const newProcessedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0)) || (existingRec ? (Number(existingRec.newProcessedKg) || 0) : 0);
     const itemSales = todayPlanItems.concat(carryoverPlanItems).reduce((sum, i) => sum + (i.salesKg || 0), 0);
@@ -263,6 +275,7 @@ export default function ButcherClosingView({
     const susutJualKg = Math.max(0, closingBySystem - actualStock);
 
     const effectiveStoreId = currentStore?.id || currentUser.storeId || '1';
+    const recId = existingRec?.id || getDeterministicClosingRecordId(effectiveStoreId, selectedPlan.name, closingDate);
 
     // Sanitize note
     const sanitizedNote = closingNote.replace(/[<>]/g, '').trim();
@@ -274,9 +287,9 @@ export default function ButcherClosingView({
     }
 
     onSaveClosingRecord({
-      id: existingRec?.id,
+      id: recId,
       storeId: effectiveStoreId,
-      date: existingRec?.date || closingDate || new Date().toISOString().split('T')[0],
+      date: closingDate,
       planName: selectedPlan.name,
       category: selectedPlan.category,
       openingStockKg: parseFloat(openingStockKg.toFixed(3)),
@@ -291,6 +304,7 @@ export default function ButcherClosingView({
       photoCaption: `Foto Timbangan Closing: ${selectedPlan.name}`,
       note: sanitizedNote,
       butcherName: currentUser.fullName || currentUser.username,
+      timestamp: `${closingDate}T17:00:00.000Z`,
     });
 
     setSuccessMsg(`✓ Status rencana "${selectedPlan.name}" kini SUDAH CLOSING (Terlock). Timbangan fisik ${actualStock.toFixed(3)} Kg disimpan & terintegrasi sebagai calon Stok Awal besok!`);
@@ -332,7 +346,7 @@ export default function ButcherClosingView({
     }
   };
 
-  const closedCount = allUniquePlans.filter((p) => records.some((r) => isPlanMatch(r.planName, p.name))).length;
+  const closedCount = allUniquePlans.filter((p) => Boolean(getRecordForPlan(p.name, closingDate))).length;
   const isAllClosed = closedCount === allUniquePlans.length && allUniquePlans.length > 0;
 
   return (
@@ -479,7 +493,16 @@ export default function ButcherClosingView({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsSavedDataModalOpen(true)}
+            className="text-xs px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer transition shadow-xs"
+            title="Buka Window Data Tersimpan di Database"
+          >
+            <Database className="w-4 h-4 text-indigo-200" />
+            Window Data Tersimpan
+          </button>
           <input
             type="date"
             value={closingDate}
@@ -501,19 +524,24 @@ export default function ButcherClosingView({
       {/* Grid of Rencana Potong Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {allUniquePlans.map((plan) => {
-          const existingRec = records.find((r) => isPlanMatch(r.planName, plan.name));
+          const existingRec = getRecordForPlan(plan.name, closingDate);
 
-          // Get items for this plan
+          // Get items for this plan and date
           const todayPlanItems = items.filter(
-            (i) => !i.isCarryover && isPlanMatch(i.plannedFabrication, plan.name)
+            (i) => !i.isCarryover && isPlanMatch(i.plannedFabrication, plan.name) &&
+            ((i.createdAt || i.thawingStartTime || '').split('T')[0] === closingDate || !(i.createdAt || i.thawingStartTime))
           );
           const carryoverPlanItems = items.filter(
-            (i) => i.isCarryover && isPlanMatch(i.plannedFabrication, plan.name)
+            (i) => i.isCarryover && isPlanMatch(i.plannedFabrication, plan.name) &&
+            ((i.createdAt || i.thawingStartTime || '').split('T')[0] === closingDate || !(i.createdAt || i.thawingStartTime))
           );
           const planSegments = segments.filter(
-            (s) => isPlanMatch(s.plannedFabrication, plan.name)
+            (s) => isPlanMatch(s.plannedFabrication, plan.name) &&
+            ((s.createdAt || s.transferTimestamp || '').split('T')[0] === closingDate || !(s.createdAt || s.transferTimestamp))
           );
-          const planAdj = adjustments.filter((a) => isPlanMatch(a.planName, plan.name));
+          const planAdj = adjustments.filter((a) => isPlanMatch(a.planName, plan.name) &&
+            ((a.date || a.createdAt || '').split('T')[0] === closingDate || !(a.date || a.createdAt))
+          );
           const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
           const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
@@ -1179,6 +1207,34 @@ export default function ButcherClosingView({
             </p>
           </div>
         </div>
+      )}
+      {/* WINDOW / MODAL UNTUK MENAMPILKAN DATA TERSIMPAN */}
+      {currentStore && (
+        <SavedDataViewerModal
+          isOpen={isSavedDataModalOpen}
+          onClose={() => setIsSavedDataModalOpen(false)}
+          currentStore={currentStore}
+          currentUser={currentUser}
+          closingRecords={records}
+          items={items}
+          initialDate={closingDate}
+          onEditClosingRecord={(rec) => {
+            setIsSavedDataModalOpen(false);
+            if (rec.date) setClosingDate(rec.date.split('T')[0]);
+            const targetPlanObj = allUniquePlans.find((p) => isPlanMatch(p.name, rec.planName)) || {
+              name: rec.planName,
+              category: rec.category || 'DAGING FRESH',
+              icon: '🥩',
+            };
+            handleOpenClosingModal(targetPlanObj, rec);
+          }}
+          onDeleteClosingRecord={(id) => {
+            const targetRec = records.find((r) => r.id === id);
+            if (targetRec) {
+              handleUndoClosing(targetRec, targetRec.planName);
+            }
+          }}
+        />
       )}
     </div>
   );
