@@ -106,13 +106,35 @@ export default function RiwayatHarian({
     }
   }, [activeDate]);
 
+  // Helper: Get clean process loss strictly adhering to Tally - Netto
+  const getCleanProcessLoss = (rep: DailyClosingReport) => {
+    const raw = typeof rep.totalWeightBeforeThawing === 'number' ? rep.totalWeightBeforeThawing : 0;
+    const thawed = typeof rep.totalWeightAfterThawing === 'number' ? rep.totalWeightAfterThawing : 0;
+    const fab = typeof rep.totalWeightAfterFabrication === 'number' ? rep.totalWeightAfterFabrication : 0;
+
+    if (raw > 0 && thawed > 0) {
+      const thawLoss = Math.max(0, raw - thawed);
+      const fabLoss = fab > 0 && thawed > fab ? Math.max(0, thawed - fab) : 0;
+      return thawLoss + fabLoss;
+    }
+
+    // Heal previous tally-leak bug (where totalProcessLoss equaled totalRaw)
+    if (raw > 0 && typeof rep.totalProcessLoss === 'number' && Math.abs(rep.totalProcessLoss - raw) < 0.05) {
+      return typeof rep.totalThawingLoss === 'number' && rep.totalThawingLoss < raw
+        ? rep.totalThawingLoss
+        : 0;
+    }
+
+    return rep.totalProcessLoss || 0;
+  };
+
   // 1. Photos from Thawing Items (Timbangan Awal Thawing)
   const dashboardItemPhotos: ReportPhotoAttachment[] = useMemo(() => {
     return items
       .filter((item) => {
         if (!item.image || item.image === 'placeholder' || !item.image.trim()) return false;
         if (viewingTodayDraft) return true;
-        const itemDate = (item.createdAt || '').split('T')[0];
+        const itemDate = (item.createdAt || item.thawingStartTime || '').split('T')[0];
         return itemDate === activeDate;
       })
       .map((item) => {
@@ -139,7 +161,7 @@ export default function RiwayatHarian({
     const currentList = (closingRecords || []).filter((rec) => {
       if (!rec.photoUrl || rec.photoUrl === 'placeholder' || !rec.photoUrl.trim()) return false;
       if (viewingTodayDraft) return true;
-      const recDate = (rec.timestamp || '').split('T')[0];
+      const recDate = (rec.date || rec.timestamp || '').split('T')[0];
       return recDate === activeDate;
     });
 
@@ -151,13 +173,13 @@ export default function RiwayatHarian({
           )
         : [];
 
-    // Deduplicate closing records by ID to avoid double entries
-    const seenRecIds = new Set<string>();
+    // Deduplicate closing records by ID or URL
+    const seenRecKeys = new Set<string>();
     const combinedClosing: typeof currentList = [];
     [...currentList, ...pastClosingList].forEach((rec) => {
-      const recId = rec.id || `${rec.storeId}_${rec.planName}_${rec.date || ''}`;
-      if (!seenRecIds.has(recId)) {
-        seenRecIds.add(recId);
+      const recKey = `${rec.id || ''}_${rec.photoUrl?.trim() || ''}`;
+      if (!seenRecKeys.has(recKey)) {
+        seenRecKeys.add(recKey);
         combinedClosing.push(rec);
       }
     });
@@ -168,13 +190,13 @@ export default function RiwayatHarian({
           ? rec.actualClosingStockKg
           : 0;
       return {
-        id: `photo_closing_${rec.id}`,
+        id: `photo_closing_${rec.id || Math.random()}`,
         url: rec.photoUrl!,
         caption:
           rec.photoCaption ||
           `Timbangan Fisik Sisa Closing: ${rec.planName} (${weightVal.toFixed(2)} Kg)`,
         category: 'Closing Stock' as const,
-        uploadedAt: rec.timestamp || new Date().toISOString(),
+        uploadedAt: rec.timestamp || rec.date || new Date().toISOString(),
       };
     });
   }, [closingRecords, viewingTodayDraft, activeDate, selectedReport]);
@@ -184,17 +206,48 @@ export default function RiwayatHarian({
     if (viewingTodayDraft) return [];
     if (!selectedReport || !selectedReport.photos) return [];
     return selectedReport.photos.filter(
-      (p) => p.url && p.url !== 'placeholder' && !deletedPhotoIds.includes(p.id)
+      (p) => p && p.url && p.url !== 'placeholder' && !deletedPhotoIds.includes(p.id)
     );
   }, [viewingTodayDraft, selectedReport, deletedPhotoIds]);
 
-  // 4. Combine all inputted photos for current active selection (STRICT DEDUPLICATION BY IMAGE URL)
+  // 4. Photos from selectedReport.itemsProcessed & closingPhotoUrl directly
+  const reportDirectPhotos: ReportPhotoAttachment[] = useMemo(() => {
+    if (viewingTodayDraft || !selectedReport) return [];
+    const directList: ReportPhotoAttachment[] = [];
+
+    if (selectedReport.closingPhotoUrl && selectedReport.closingPhotoUrl.trim() && selectedReport.closingPhotoUrl !== 'placeholder') {
+      directList.push({
+        id: `photo_closing_direct_${selectedReport.id}`,
+        url: selectedReport.closingPhotoUrl.trim(),
+        caption: `Bukti Closing Fisik (${selectedReport.date})`,
+        category: 'Closing Stock' as const,
+        uploadedAt: selectedReport.closedAt || selectedReport.date || new Date().toISOString(),
+      });
+    }
+
+    (selectedReport.itemsProcessed || []).forEach((item: any, idx: number) => {
+      const imgUrl = (item.image || item.photoUrl || '').trim();
+      if (imgUrl && imgUrl !== 'placeholder') {
+        directList.push({
+          id: `photo_item_proc_${item.id || idx}`,
+          url: imgUrl,
+          caption: `Timbangan Raw/Thawing: ${item.name || 'Bahan'} (${(item.weightBefore || 0).toFixed(2)} Kg) | Thawing: ${(item.weightAfter || 0).toFixed(2)} Kg [${item.plannedFabrication || ''}]`,
+          category: 'Timbangan' as const,
+          uploadedAt: selectedReport.closedAt || selectedReport.date || new Date().toISOString(),
+        });
+      }
+    });
+
+    return directList;
+  }, [viewingTodayDraft, selectedReport]);
+
+  // 5. Combine all inputted photos for current active selection (STRICT DEDUPLICATION BY IMAGE URL)
   const currentPhotos: ReportPhotoAttachment[] = useMemo(() => {
     const seenUrls = new Set<string>();
     const uniquePhotos: ReportPhotoAttachment[] = [];
 
-    // Order: live items & closing records first, then report attachments
-    [...dashboardItemPhotos, ...closingPhotos, ...reportSpecificPhotos].forEach((p) => {
+    // Order: live items & closing records first, then direct report photos, then report attachments
+    [...dashboardItemPhotos, ...closingPhotos, ...reportDirectPhotos, ...reportSpecificPhotos].forEach((p) => {
       if (!p || !p.url || p.url === 'placeholder' || !p.url.trim()) return;
       if (deletedPhotoIds.includes(p.id)) return;
 
@@ -210,7 +263,33 @@ export default function RiwayatHarian({
       const timeB = new Date(b.uploadedAt || 0).getTime();
       return timeB - timeA; // newest first
     });
-  }, [reportSpecificPhotos, dashboardItemPhotos, closingPhotos, deletedPhotoIds]);
+  }, [reportSpecificPhotos, reportDirectPhotos, dashboardItemPhotos, closingPhotos, deletedPhotoIds]);
+
+  // Helper: Count all photos accurately for a report
+  const getReportPhotoCount = (rep: DailyClosingReport) => {
+    const seen = new Set<string>();
+    (rep.photos || []).forEach((p) => {
+      if (p && p.url && p.url.trim() && p.url !== 'placeholder') seen.add(p.url.trim());
+    });
+    if (rep.closingPhotoUrl && rep.closingPhotoUrl.trim() && rep.closingPhotoUrl !== 'placeholder') {
+      seen.add(rep.closingPhotoUrl.trim());
+    }
+    (rep.closingPlanRecords || []).forEach((c) => {
+      if (c && c.photoUrl && c.photoUrl.trim() && c.photoUrl !== 'placeholder') seen.add(c.photoUrl.trim());
+    });
+    (rep.itemsProcessed || []).forEach((i: any) => {
+      const url = (i.image || i.photoUrl || '').trim();
+      if (url && url !== 'placeholder') seen.add(url);
+    });
+    items
+      .filter((i) => (i.createdAt || i.thawingStartTime || '').startsWith(rep.date) && i.image && i.image.trim() && i.image !== 'placeholder')
+      .forEach((i) => seen.add(i.image.trim()));
+    closingRecords
+      .filter((c) => (c.date || c.timestamp || '').startsWith(rep.date) && c.photoUrl && c.photoUrl.trim() && c.photoUrl !== 'placeholder')
+      .forEach((c) => seen.add(c.photoUrl!.trim()));
+
+    return Math.max(seen.size, (rep.photos || []).length);
+  };
 
   // Delete photo
   const handleDeletePhoto = (photoId: string) => {
@@ -389,7 +468,8 @@ export default function RiwayatHarian({
                     }
                   })();
 
-                  const repPhotosCount = (rep.photos || []).length;
+                  const repPhotosCount = getReportPhotoCount(rep);
+                  const cleanProcessLoss = getCleanProcessLoss(rep);
 
                   return (
                     <div
@@ -418,7 +498,7 @@ export default function RiwayatHarian({
                         <div>
                           <span className="text-slate-400 block text-[10px]">Susut Proses</span>
                           <span className="font-bold text-slate-800">
-                            {(rep.totalProcessLoss || 0).toFixed(2)} Kg
+                            {cleanProcessLoss.toFixed(2)} Kg
                           </span>
                         </div>
                         <div>
