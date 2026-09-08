@@ -151,7 +151,16 @@ export default function RiwayatHarian({
           )
         : [];
 
-    const combinedClosing = [...currentList, ...pastClosingList];
+    // Deduplicate closing records by ID to avoid double entries
+    const seenRecIds = new Set<string>();
+    const combinedClosing: typeof currentList = [];
+    [...currentList, ...pastClosingList].forEach((rec) => {
+      const recId = rec.id || `${rec.storeId}_${rec.planName}_${rec.date || ''}`;
+      if (!seenRecIds.has(recId)) {
+        seenRecIds.add(recId);
+        combinedClosing.push(rec);
+      }
+    });
 
     return combinedClosing.map((rec) => {
       const weightVal =
@@ -179,17 +188,24 @@ export default function RiwayatHarian({
     );
   }, [viewingTodayDraft, selectedReport, deletedPhotoIds]);
 
-  // 4. Combine all inputted photos for current active selection
+  // 4. Combine all inputted photos for current active selection (STRICT DEDUPLICATION BY IMAGE URL)
   const currentPhotos: ReportPhotoAttachment[] = useMemo(() => {
-    const photoMap = new Map<string, ReportPhotoAttachment>();
+    const seenUrls = new Set<string>();
+    const uniquePhotos: ReportPhotoAttachment[] = [];
 
-    [...reportSpecificPhotos, ...dashboardItemPhotos, ...closingPhotos].forEach((p) => {
-      if (p.id && !deletedPhotoIds.includes(p.id)) {
-        photoMap.set(p.id, p);
+    // Order: live items & closing records first, then report attachments
+    [...dashboardItemPhotos, ...closingPhotos, ...reportSpecificPhotos].forEach((p) => {
+      if (!p || !p.url || p.url === 'placeholder' || !p.url.trim()) return;
+      if (deletedPhotoIds.includes(p.id)) return;
+
+      const cleanUrl = p.url.trim();
+      if (!seenUrls.has(cleanUrl)) {
+        seenUrls.add(cleanUrl);
+        uniquePhotos.push(p);
       }
     });
 
-    return Array.from(photoMap.values()).sort((a, b) => {
+    return uniquePhotos.sort((a, b) => {
       const timeA = new Date(a.uploadedAt || 0).getTime();
       const timeB = new Date(b.uploadedAt || 0).getTime();
       return timeB - timeA; // newest first
