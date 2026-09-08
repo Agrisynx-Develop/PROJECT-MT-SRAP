@@ -440,19 +440,80 @@ try {
 }
 
 
+export const deduplicateThawingItems = (rawItems: ThawingItem[]): ThawingItem[] => {
+  if (!Array.isArray(rawItems)) return [];
+  const mapBySemantic = new Map<string, ThawingItem>();
+
+  for (const item of rawItems) {
+    if (!item) continue;
+    const id = item.id || `meat_${Math.random().toString(36).substring(2, 8)}`;
+    const storeId = item.storeId || '1';
+    const datePart = (item.createdAt || item.thawingStartTime || '').split('T')[0] || 'nodate';
+    const nameNorm = (item.name || '').trim().toLowerCase();
+    const planNorm = (item.plannedFabrication || '').trim().toLowerCase();
+    const wBefore = (Number(item.weightBeforeThawing) || 0).toFixed(3);
+    const wAfter = (Number(item.weightAfterThawing !== null && item.weightAfterThawing !== undefined ? item.weightAfterThawing : item.weightBeforeThawing) || 0).toFixed(3);
+    const hasPhoto = Boolean(item.image && item.image !== 'placeholder' && item.image.trim());
+
+    // Strict semantic signature: store + date + name + plan + tally + netto
+    const semKey = `${storeId}_${datePart}_${nameNorm}_${planNorm}_${wBefore}_${wAfter}`;
+
+    if (mapBySemantic.has(semKey)) {
+      const existing = mapBySemantic.get(semKey)!;
+      const existingHasPhoto = Boolean(existing.image && existing.image !== 'placeholder' && existing.image.trim());
+      if (hasPhoto && !existingHasPhoto) {
+        mapBySemantic.set(semKey, { ...item, id: existing.id || item.id });
+      }
+    } else {
+      mapBySemantic.set(semKey, { ...item, id });
+    }
+  }
+
+  return Array.from(mapBySemantic.values());
+};
+
+export const deduplicateDailyReports = (reports: DailyClosingReport[]): DailyClosingReport[] => {
+  if (!Array.isArray(reports)) return [];
+  const map = new Map<string, DailyClosingReport>();
+  for (const r of reports) {
+    if (!r) continue;
+    const storeId = r.storeId || '1';
+    const date = (r.date || '').split('T')[0];
+    const key = `${storeId}_${date}`;
+    if (!map.has(key)) {
+      map.set(key, r);
+    } else {
+      const existing = map.get(key)!;
+      const existingTime = new Date(existing.closedAt || 0).getTime();
+      const newTime = new Date(r.closedAt || 0).getTime();
+      if (newTime >= existingTime) {
+        map.set(key, r);
+      }
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+};
+
 export const getThawingItems = (): ThawingItem[] => {
   const data = localStorage.getItem('thawing_items');
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data);
+    return deduplicateThawingItems(parsed);
+  } catch {
+    return [];
+  }
 };
 
 export const saveThawingItems = (items: ThawingItem[], updatedSingleItem?: ThawingItem) => {
-  safeSetItem('thawing_items', JSON.stringify(items));
-  postApiBackground('/api/thawing-items', items);
+  const cleanItems = deduplicateThawingItems(items);
+  safeSetItem('thawing_items', JSON.stringify(cleanItems));
+  postApiBackground('/api/thawing-items', cleanItems);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleItem) {
       upsertRecordToSheets('Thawing_Daging', updatedSingleItem);
     } else {
-      updateTableInSheets('Thawing_Daging', items);
+      updateTableInSheets('Thawing_Daging', cleanItems);
     }
   }
 };
@@ -591,33 +652,10 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
       safeSetItem('cogs_master', JSON.stringify(normalizeCogsList(d.cogsMaster)));
     }
 
-    // 4. Thawing Items / Bahan Baku Masuk (Defensive Smart Merge: NEVER wipe out local items!)
+    // 4. Thawing Items / Bahan Baku Masuk (Defensive Smart Merge: NEVER duplicate items!)
     const currentLocalItems = getThawingItems();
-    const itemMap = new Map<string, ThawingItem>();
-    // First index cloud items
-    (d.thawingItems || []).forEach((item) => {
-      if (item && item.id) {
-        itemMap.set(String(item.id), item);
-      }
-    });
-    // Then preserve and merge local items
-    currentLocalItems.forEach((loc) => {
-      if (!loc || !loc.id) return;
-      const key = String(loc.id);
-      if (!itemMap.has(key)) {
-        // Newly created local item that cloud doesn't have yet -> PRESERVE!
-        itemMap.set(key, loc);
-      } else {
-        // If both exist, keep the one with photo or latest timestamp
-        const cloudItem = itemMap.get(key)!;
-        const locHasPhoto = Boolean(loc.image && loc.image !== 'placeholder');
-        const cloudHasPhoto = Boolean(cloudItem.image && cloudItem.image !== 'placeholder');
-        if (locHasPhoto && !cloudHasPhoto) {
-          itemMap.set(key, { ...cloudItem, image: loc.image });
-        }
-      }
-    });
-    const mergedItems = Array.from(itemMap.values()).filter(
+    const candidateItems = [...(d.thawingItems || []), ...currentLocalItems];
+    const mergedItems = deduplicateThawingItems(candidateItems).filter(
       (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'
     );
     safeSetItem('thawing_items', JSON.stringify(mergedItems));
@@ -704,21 +742,10 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
 
     // 7. Daily Closing Reports (Rekap Harian)
     const currentLocalReports = getDailyReports();
-    const reportMap = new Map<string, DailyClosingReport>();
-    (d.dailyClosingReports || []).forEach((r) => {
-      if (r && r.date && r.date.split('T')[0] !== '2026-08-29') {
-        const key = r.id || `${r.storeId || '1'}_${r.date.split('T')[0]}`;
-        reportMap.set(key, r);
-      }
-    });
-    currentLocalReports.forEach((loc) => {
-      if (!loc || !loc.date || loc.date.split('T')[0] === '2026-08-29') return;
-      const key = loc.id || `${loc.storeId || '1'}_${loc.date.split('T')[0]}`;
-      if (!reportMap.has(key)) {
-        reportMap.set(key, loc);
-      }
-    });
-    const mergedReports = Array.from(reportMap.values());
+    const candidateReports = [...(d.dailyClosingReports || []), ...currentLocalReports].filter(
+      (r) => r && r.date && r.date.split('T')[0] !== '2026-08-29'
+    );
+    const mergedReports = deduplicateDailyReports(candidateReports);
     safeSetItem('daily_reports', JSON.stringify(mergedReports));
     d.dailyClosingReports = mergedReports;
 
