@@ -201,33 +201,60 @@ export default function App() {
 
             // Merge with local records if local has newer closed timestamp or non-zero weight
             const local = getClosingPlanRecords();
-            const localList = (Array.isArray(local) ? local : []).filter(
+            const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
               (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
             );
-            const merged: ClosingPlanRecord[] = [...sanitized];
+
+            // Robust merge: sheets/cloud base with local updates taking precedence
+            const recordMap = new Map<string, ClosingPlanRecord>();
+            sanitized.forEach((srv) => {
+              const key = srv.id || `${srv.storeId}_${srv.planName}_${srv.date || ''}`;
+              recordMap.set(key, srv);
+            });
 
             localList.forEach((loc) => {
-              const idx = merged.findIndex(
-                (s) =>
-                  s.id === loc.id ||
-                  (matchStoreEntity(s.storeId, { id: loc.storeId }) &&
-                    isMatchPlan(s.planName, loc.planName) &&
-                    (s.date === loc.date || !s.date || !loc.date))
-              );
-              if (idx < 0) {
-                merged.push(loc);
+              let foundKey: string | undefined = undefined;
+              if (loc.id && recordMap.has(loc.id)) {
+                foundKey = loc.id;
               } else {
-                const locActual = Number(loc.actualClosingStockKg) || 0;
-                const srvActual = Number(merged[idx].actualClosingStockKg) || 0;
-                if (locActual > 0 && srvActual === 0) {
-                  merged[idx] = { ...merged[idx], ...loc };
-                } else if (new Date(loc.timestamp || 0).getTime() > new Date(merged[idx].timestamp || 0).getTime()) {
-                  merged[idx] = { ...merged[idx], ...loc };
+                for (const [k, s] of recordMap.entries()) {
+                  if (
+                    matchStoreEntity(s.storeId, { id: loc.storeId }) &&
+                    isMatchPlan(s.planName, loc.planName) &&
+                    (s.date === loc.date || (!s.date && !loc.date))
+                  ) {
+                    foundKey = k;
+                    break;
+                  }
+                }
+              }
+
+              if (!foundKey) {
+                const newKey = loc.id || `${loc.storeId}_${loc.planName}_${loc.date || ''}`;
+                recordMap.set(newKey, loc);
+              } else {
+                const existing = recordMap.get(foundKey)!;
+                const locTime = new Date(loc.timestamp || 0).getTime();
+                const srvTime = new Date(existing.timestamp || 0).getTime();
+                const locActual = Number(loc.actualClosingStockKg || 0);
+                const srvActual = Number(existing.actualClosingStockKg || 0);
+
+                if (locTime >= srvTime || (locActual > 0 && srvActual === 0) || (loc.photoUrl && !existing.photoUrl)) {
+                  recordMap.set(foundKey, { ...existing, ...loc });
+                } else {
+                  recordMap.set(foundKey, {
+                    ...loc,
+                    ...existing,
+                    photoUrl: existing.photoUrl || loc.photoUrl || '',
+                    note: existing.note || loc.note || '',
+                  });
                 }
               }
             });
 
-            const filteredMerged = merged.filter((r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
+            const filteredMerged = Array.from(recordMap.values()).filter(
+              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+            );
             setClosingRecords(filteredMerged);
             if (filteredMerged.length > 0) {
               saveClosingPlanRecords(filteredMerged);
@@ -316,29 +343,63 @@ export default function App() {
       if (resRecords && resRecords.ok) {
         const data = await resRecords.json();
         const local = getClosingPlanRecords();
-        const serverList = (Array.isArray(data) ? data : []).filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
-        const localList = (Array.isArray(local) ? local : []).filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
+        const serverList: ClosingPlanRecord[] = (Array.isArray(data) ? data : []).filter(
+          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+        );
+        const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
+          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+        );
 
-        // Merge: Start with server records, but keep any local records that are not on the server
-        const merged = [...serverList];
+        // Robust merge: server base with local updates taking priority
+        const recordMap = new Map<string, ClosingPlanRecord>();
+        serverList.forEach((srv) => {
+          const key = srv.id || `${srv.storeId}_${srv.planName}_${srv.date || ''}`;
+          recordMap.set(key, srv);
+        });
+
         localList.forEach((loc) => {
-          const idx = merged.findIndex(
-            (s) =>
-              matchStoreEntity(s.storeId, { id: loc.storeId }) &&
-              isMatchPlan(s.planName, loc.planName) &&
-              s.date === loc.date
-          );
-          if (idx < 0) {
-            merged.push(loc);
+          let foundKey: string | undefined = undefined;
+          if (loc.id && recordMap.has(loc.id)) {
+            foundKey = loc.id;
           } else {
-            // If local has newer timestamp or actual stock, prioritize it
-            if (loc.actualClosingStockKg !== undefined && loc.actualClosingStockKg > 0 && (!merged[idx].actualClosingStockKg || merged[idx].actualClosingStockKg === 0)) {
-              merged[idx] = { ...merged[idx], ...loc };
+            for (const [k, s] of recordMap.entries()) {
+              if (
+                matchStoreEntity(s.storeId, { id: loc.storeId }) &&
+                isMatchPlan(s.planName, loc.planName) &&
+                (s.date === loc.date || (!s.date && !loc.date))
+              ) {
+                foundKey = k;
+                break;
+              }
+            }
+          }
+
+          if (!foundKey) {
+            const newKey = loc.id || `${loc.storeId}_${loc.planName}_${loc.date || ''}`;
+            recordMap.set(newKey, loc);
+          } else {
+            const existing = recordMap.get(foundKey)!;
+            const locTime = new Date(loc.timestamp || 0).getTime();
+            const srvTime = new Date(existing.timestamp || 0).getTime();
+            const locActual = Number(loc.actualClosingStockKg || 0);
+            const srvActual = Number(existing.actualClosingStockKg || 0);
+
+            if (locTime >= srvTime || (locActual > 0 && srvActual === 0) || (loc.photoUrl && !existing.photoUrl)) {
+              recordMap.set(foundKey, { ...existing, ...loc });
+            } else {
+              recordMap.set(foundKey, {
+                ...loc,
+                ...existing,
+                photoUrl: existing.photoUrl || loc.photoUrl || '',
+                note: existing.note || loc.note || '',
+              });
             }
           }
         });
 
-        const filtered = merged.filter((r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29');
+        const filtered = Array.from(recordMap.values()).filter(
+          (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+        );
         setClosingRecords(filtered);
         if (filtered.length > 0) {
           saveClosingPlanRecords(filtered);
@@ -965,29 +1026,27 @@ export default function App() {
       id: recId,
       timestamp: new Date().toISOString(),
     };
-    const existingIdx = closingRecords.findIndex(
-      (r) =>
-        r.id === newRec.id ||
-        (matchStoreEntity(r.storeId, { id: newRec.storeId }) &&
-          isMatchPlan(r.planName, newRec.planName) &&
-          (r.date === newRec.date || !r.date || !newRec.date))
-    );
-    let updated: ClosingPlanRecord[];
-    if (existingIdx >= 0) {
-      updated = [...closingRecords];
-      updated[existingIdx] = newRec;
-    } else {
-      updated = [newRec, ...closingRecords];
-    }
-    setClosingRecords(updated);
-    saveClosingPlanRecords(updated, newRec);
+    
+    setClosingRecords((prev) => {
+      const existingIdx = prev.findIndex(
+        (r) =>
+          r.id === newRec.id ||
+          (matchStoreEntity(r.storeId, { id: newRec.storeId }) &&
+            isMatchPlan(r.planName, newRec.planName) &&
+            (r.date === newRec.date || !r.date || !newRec.date))
+      );
+      let updated: ClosingPlanRecord[];
+      if (existingIdx >= 0) {
+        updated = [...prev];
+        updated[existingIdx] = { ...prev[existingIdx], ...newRec };
+      } else {
+        updated = [newRec, ...prev];
+      }
+      saveClosingPlanRecords(updated, newRec);
+      return updated;
+    });
 
     upsertRecordToSheets('closing_plan_records', newRec);
-    fetch('/api/closing-records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newRec)
-    }).catch(console.error);
 
     // Cross-tab broadcast for instant multi-device/multi-window synchronization
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -1003,7 +1062,7 @@ export default function App() {
     // Trigger subtle cloud refresh to verify cloud alignment
     setTimeout(() => {
       fetchAllData(true);
-    }, 1800);
+    }, 2000);
   };
 
   // Handler: Transfer Purpose (Pesanan <-> Display)
@@ -1446,18 +1505,18 @@ export default function App() {
       roles: ['butcher', 'admin'],
     },
     {
-      id: 'closing_butcher',
-      label: 'Closing Rencana Potong',
-      icon: CheckSquare,
-      color: 'text-rose-500',
-      roles: ['butcher', 'admin', 'md'],
-    },
-    {
       id: 'sales',
       label: 'Update Sales',
       icon: DollarSign,
       color: 'text-emerald-500',
       roles: ['admin'],
+    },
+    {
+      id: 'closing_butcher',
+      label: 'Closing Rencana Potong',
+      icon: CheckSquare,
+      color: 'text-rose-500',
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'riwayat',
