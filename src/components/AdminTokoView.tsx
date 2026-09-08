@@ -19,6 +19,16 @@ import {
   exportStoreDailyLaporanCSV,
   downloadCSV
 } from '../utils/excelExport';
+import { upsertRecordToSheets } from '../utils/sheetsApi';
+
+export interface UnifiedBahanRow {
+  id: string;
+  bahan: string;
+  tally: string; // berat awal beku [Kg]
+  netto: string; // berat setelah thaw [Kg]
+  foto: string;  // foto timbangan netto
+  isOptimizingPhoto?: boolean;
+}
 import {
   Building2,
   TrendingDown,
@@ -129,30 +139,111 @@ export default function AdminTokoView({
     return todayIso;
   });
 
-  // Input Laporan Terlewat Form State
-  const [reportPlanName, setReportPlanName] = useState('D.sapi pot. rdang');
-  const [reportCategory, setReportCategory] = useState('DAGING FRESH');
-  const [reportOpeningStock, setReportOpeningStock] = useState('');
-  const [reportNewProcessed, setReportNewProcessed] = useState('');
-  const [reportSales, setReportSales] = useState('');
-  const [reportActualStock, setReportActualStock] = useState('');
-  const [reportNote, setReportNote] = useState('');
-  const [reportPhoto, setReportPhoto] = useState<string>('');
-  const [isOptimizingReportPhoto, setIsOptimizingReportPhoto] = useState<boolean>(false);
+  // Standard Cuts List
+  const STANDARD_PLANS = [
+    { name: 'D.sapi pot. rdang', category: 'DAGING FRESH', defaultCogs: 102000 },
+    { name: 'Daging Rendang Shankle', category: 'SHANKLE', defaultCogs: 85200 },
+    { name: 'D Premium lokal', category: 'DAGING PREMIUM', defaultCogs: 127000 },
+    { name: 'Rawon Curah', category: 'RAWON', defaultCogs: 86500 },
+    { name: 'D.r. fresh member', category: 'DAGING FRESH', defaultCogs: 102000 },
+    { name: 'FRIBOY / Daging Prem 2', category: 'DAGING PREMIUM', defaultCogs: 103000 },
+  ];
+
+  // Unified Input Form State
+  const [unifiedPlanSelect, setUnifiedPlanSelect] = useState('D.sapi pot. rdang');
+  const [unifiedCustomPlan, setUnifiedCustomPlan] = useState('');
+  const [unifiedCategory, setUnifiedCategory] = useState('DAGING FRESH');
+
+  const [unifiedBahanList, setUnifiedBahanList] = useState<UnifiedBahanRow[]>([
+    { id: 'b_init_1', bahan: '', tally: '', netto: '', foto: '' }
+  ]);
+
+  const [unifiedSisaKemarin, setUnifiedSisaKemarin] = useState('');
+  const [unifiedPenjualanSales, setUnifiedPenjualanSales] = useState('');
+  const [unifiedTimbanganSisaFisik, setUnifiedTimbanganSisaFisik] = useState('');
+  const [unifiedFotoClosing, setUnifiedFotoClosing] = useState('');
+  const [isOptimizingClosingPhoto, setIsOptimizingClosingPhoto] = useState<boolean>(false);
+  const [unifiedNotes, setUnifiedNotes] = useState('');
   const [editingClosingId, setEditingClosingId] = useState<string | null>(null);
   const [closingInputMsg, setClosingInputMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Input Bahan Baku Terlewat Form State
-  const [matName, setMatName] = useState('');
-  const [matPlanSelect, setMatPlanSelect] = useState('D.sapi pot. rdang');
-  const [matCustomPlan, setMatCustomPlan] = useState('');
-  const [matPlan, setMatPlan] = useState('D.sapi pot. rdang');
-  const [matCategory, setMatCategory] = useState('DAGING FRESH');
-  const [matWeightBefore, setMatWeightBefore] = useState('');
-  const [matWeightAfter, setMatWeightAfter] = useState('');
-  const [matPhoto, setMatPhoto] = useState<string>('');
-  const [isOptimizingMatPhoto, setIsOptimizingMatPhoto] = useState<boolean>(false);
-  const [matMsg, setMatMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Derived Live Calculations for Unified Form (Semua Otomatis Terisi)
+  const totalTally = useMemo(() => {
+    return unifiedBahanList.reduce((acc, b) => acc + (parseFloat(b.tally) || 0), 0);
+  }, [unifiedBahanList]);
+
+  const totalNetto = useMemo(() => {
+    return unifiedBahanList.reduce((acc, b) => acc + (parseFloat(b.netto) || 0), 0);
+  }, [unifiedBahanList]);
+
+  const susutProsesKg = useMemo(() => {
+    return Math.max(0, totalTally - totalNetto);
+  }, [totalTally, totalNetto]);
+
+  const susutProsesPct = useMemo(() => {
+    return totalTally > 0 ? (susutProsesKg / totalTally) * 100 : 0;
+  }, [totalTally, susutProsesKg]);
+
+  const sisaKemarinNum = parseFloat(unifiedSisaKemarin) || 0;
+  const totalTersediaKg = useMemo(() => {
+    return sisaKemarinNum + totalNetto;
+  }, [sisaKemarinNum, totalNetto]);
+
+  const salesNum = parseFloat(unifiedPenjualanSales) || 0;
+  const sisaSistemKg = useMemo(() => {
+    return Math.max(0, totalTersediaKg - salesNum);
+  }, [totalTersediaKg, salesNum]);
+
+  const sisaFisikNum = parseFloat(unifiedTimbanganSisaFisik) || 0;
+  const susutJualKg = useMemo(() => {
+    return Math.max(0, sisaSistemKg - sisaFisikNum);
+  }, [sisaSistemKg, sisaFisikNum]);
+
+  const susutJualPct = useMemo(() => {
+    return sisaSistemKg > 0 ? (susutJualKg / sisaSistemKg) * 100 : 0;
+  }, [sisaSistemKg, susutJualKg]);
+
+  // Dynamic Bahan Row Handlers
+  const handleAddBahanRow = () => {
+    setUnifiedBahanList((prev) => [
+      ...prev,
+      { id: `b_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, bahan: '', tally: '', netto: '', foto: '' }
+    ]);
+  };
+
+  const handleRemoveBahanRow = (id: string) => {
+    if (unifiedBahanList.length <= 1) {
+      setUnifiedBahanList([{ id: `b_${Date.now()}`, bahan: '', tally: '', netto: '', foto: '' }]);
+      return;
+    }
+    setUnifiedBahanList((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleUpdateBahanRow = (id: string, field: keyof UnifiedBahanRow, value: any) => {
+    setUnifiedBahanList((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, [field]: value } : b))
+    );
+  };
+
+  const handleBahanPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>, id: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    handleUpdateBahanRow(id, 'isOptimizingPhoto', true);
+    try {
+      const compressed = await processHighResImage(file, {
+        maxWidth: 1280,
+        maxHeight: 1280,
+        quality: 0.8,
+        format: 'image/jpeg',
+      });
+      handleUpdateBahanRow(id, 'foto', compressed);
+    } catch (err) {
+      console.error('Gagal memproses foto bahan:', err);
+    } finally {
+      handleUpdateBahanRow(id, 'isOptimizingPhoto', false);
+      e.target.value = '';
+    }
+  };
 
   // Lightbox Zoom Modal State
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<{ url: string; title: string } | null>(null);
@@ -172,16 +263,6 @@ export default function AdminTokoView({
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
-
-  // Standard Cuts List
-  const STANDARD_PLANS = [
-    { name: 'D.sapi pot. rdang', category: 'DAGING FRESH', defaultCogs: 102000 },
-    { name: 'Daging Rendang Shankle', category: 'SHANKLE', defaultCogs: 85200 },
-    { name: 'D Premium lokal', category: 'DAGING PREMIUM', defaultCogs: 127000 },
-    { name: 'Rawon Curah', category: 'RAWON', defaultCogs: 86500 },
-    { name: 'D.r. fresh member', category: 'DAGING FRESH', defaultCogs: 102000 },
-    { name: 'FRIBOY / Daging Prem 2', category: 'DAGING PREMIUM', defaultCogs: 103000 },
-  ];
 
   // Helper: Get COGS
   const getCogs = (itemName?: string, category?: string) => {
@@ -326,170 +407,194 @@ export default function AdminTokoView({
     }
   };
 
-  // Submit Past Closing Input (Admin)
-  const handleSavePastClosing = (e: React.FormEvent) => {
+  // Submit Unified Input Form (Rencana Potong + Bahan + Closing)
+  const handleUnifiedSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!onSaveClosingRecord) {
       setClosingInputMsg({ type: 'error', text: 'Handler penyimpanan closing belum tersedia.' });
       return;
     }
-    const opening = parseFloat(reportOpeningStock) || 0;
-    const proc = parseFloat(reportNewProcessed) || 0;
-    const sales = parseFloat(reportSales) || 0;
-    const actual = parseFloat(reportActualStock) || 0;
-    const totalTersedia = opening + proc;
-    const stokSistem = Math.max(0, totalTersedia - sales);
-    const susutJual = Math.max(0, stokSistem - actual);
 
-    const recordToSave: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string } = {
-      id: editingClosingId || getDeterministicClosingRecordId(currentStore.id, reportPlanName, selectedDate),
+    const effectivePlan =
+      unifiedPlanSelect === 'CUSTOM'
+        ? unifiedCustomPlan.trim() || 'D.sapi pot. rdang'
+        : unifiedPlanSelect;
+    const effectiveCategory = unifiedCategory || 'DAGING FRESH';
+    const timestampStr = `${selectedDate}T08:00:00.000Z`;
+
+    // 1. Filter dan proses semua bahan yang diinput
+    const validBahan = unifiedBahanList.filter(
+      (b) => b.bahan.trim() || (parseFloat(b.tally) || 0) > 0 || (parseFloat(b.netto) || 0) > 0
+    );
+
+    const newlyAddedItems: ThawingItem[] = [];
+
+    if (onAddItem && validBahan.length > 0) {
+      validBahan.forEach((b, idx) => {
+        const wBefore = parseFloat(b.tally) || 0;
+        const wAfter = parseFloat(b.netto) || wBefore;
+        const bLossKg = Math.max(0, wBefore - wAfter);
+        const bLossPct = wBefore > 0 ? (bLossKg / wBefore) * 100 : 0;
+
+        const newItem: ThawingItem = {
+          id: `meat_unified_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+          name: b.bahan.trim() || `Bahan ${effectivePlan}`,
+          pabrikasiCategory: effectiveCategory,
+          plannedFabrication: effectivePlan,
+          weightBeforeThawing: wBefore,
+          weightAfterThawing: wAfter,
+          shrinkageThawing: bLossKg,
+          shrinkageThawingPercent: bLossPct,
+          openingPurpose: 'UNTUK DISPLAY',
+          status: 'pabrikasi_done',
+          thawingStartTime: timestampStr,
+          thawingEndTime: `${selectedDate}T09:00:00.000Z`,
+          createdAt: timestampStr,
+          storeId: currentStore.id,
+          isCarryover: false,
+          image: b.foto || '',
+          butcherName: `${currentUser.fullName} (Input Terpadu)`,
+        };
+
+        onAddItem(newItem);
+        upsertRecordToSheets('thawing_items', newItem);
+        newlyAddedItems.push(newItem);
+      });
+    }
+
+    // 2. Simpan Data Closing Fisik Rencana Potong
+    const recId = editingClosingId || getDeterministicClosingRecordId(currentStore.id, effectivePlan, selectedDate);
+    const recordToSave: ClosingPlanRecord = {
+      id: recId,
       storeId: currentStore.id,
       date: selectedDate,
-      planName: reportPlanName,
-      category: reportCategory,
-      openingStockKg: opening,
-      newProcessedKg: proc,
+      planName: effectivePlan,
+      category: effectiveCategory,
+      openingStockKg: sisaKemarinNum,
+      newProcessedKg: parseFloat(totalNetto.toFixed(3)),
       adjustInKg: 0,
       adjustOutKg: 0,
-      salesKg: sales,
-      closingStockBySystemKg: parseFloat(stokSistem.toFixed(3)),
-      actualClosingStockKg: actual,
-      susutJualKg: parseFloat(susutJual.toFixed(3)),
-      butcherName: `${currentUser.fullName} (Admin Input)`,
-      note: reportNote || `Input closing fisik tanggal ${selectedDate}`,
-      photoUrl: reportPhoto || '',
+      salesKg: salesNum,
+      closingStockBySystemKg: parseFloat(sisaSistemKg.toFixed(3)),
+      actualClosingStockKg: sisaFisikNum,
+      susutJualKg: parseFloat(susutJualKg.toFixed(3)),
+      butcherName: `${currentUser.fullName} (Input Terpadu)`,
+      note:
+        unifiedNotes ||
+        `Input terpadu: ${validBahan.length} bahan (${validBahan.map((b) => b.bahan || 'Bahan').join(', ') || 'Tanpa bahan'})`,
+      photoUrl: unifiedFotoClosing || (validBahan[0]?.foto || ''),
+      photoCaption: `Bukti Fisik Closing: ${effectivePlan}`,
+      timestamp: `${selectedDate}T17:00:00.000Z`,
     };
 
     onSaveClosingRecord(recordToSave);
+    upsertRecordToSheets('closing_plan_records', recordToSave);
+
+    // 3. Compile & Finalize DailyClosingReport agar Riwayat Harian & Laporan Excel auto-terisi
+    const currentStoreClosings = (closingRecords || []).filter(
+      (c) => matchStoreEntity(c.storeId, currentStore) && (c.date || c.timestamp || '').startsWith(selectedDate) && c.id !== recId
+    );
+    const allClosingsForDate = [recordToSave, ...currentStoreClosings];
+
+    const currentStoreItems = (items || []).filter(
+      (i) => matchStoreEntity(i.storeId, currentStore) && (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate)
+    );
+    const allItemsForDate = [...newlyAddedItems, ...currentStoreItems];
+
+    const storeSegsForDate = (segments || []).filter(
+      (s) => matchStoreEntity(s.storeId, currentStore) && (s.createdAt || s.transferTimestamp || '').startsWith(selectedDate)
+    );
+
+    const totalRaw = allItemsForDate.filter((i) => !i.isCarryover).reduce((s, i) => s + (i.weightBeforeThawing || 0), 0);
+    const totalThawed = allItemsForDate.filter((i) => !i.isCarryover).reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0);
+    const totalFab = storeSegsForDate.reduce((s, seg) => s + seg.actualWeight, 0);
+    const totalThawLoss = Math.max(0, totalRaw - totalThawed);
+    const totalFabLoss = Math.max(0, totalThawed - totalFab);
+    const allProcessLoss = totalThawLoss + totalFabLoss;
+    const allSusutJual = allClosingsForDate.reduce((s, c) => s + (c.susutJualKg || 0), 0);
+    const totalSales = allClosingsForDate.reduce((s, c) => s + (c.salesKg || 0), 0) + storeSegsForDate.reduce((s, seg) => s + (seg.salesKg || 0), 0);
+    const carryoverOpening = allItemsForDate.filter((i) => i.isCarryover).reduce((s, i) => s + (i.weightBeforeThawing || 0), 0);
+    const currentClosing = allClosingsForDate.reduce((s, c) => s + (c.actualClosingStockKg || 0), 0);
+
+    // Kumpulkan foto timbangan bahan dan closing fisik
+    const allPhotos: any[] = [];
+    allClosingsForDate.filter((c) => c.photoUrl).forEach((c, idx) => {
+      allPhotos.push({
+        id: `photo_close_${c.id || idx}_${Date.now()}`,
+        url: c.photoUrl!,
+        caption: c.photoCaption || `Bukti Closing Fisik: ${c.planName}`,
+        category: 'Closing Stock',
+        uploadedAt: c.timestamp || new Date().toISOString(),
+      });
+    });
+    allItemsForDate.filter((i) => i.image).forEach((i, idx) => {
+      allPhotos.push({
+        id: `photo_item_${i.id || idx}_${Date.now()}`,
+        url: i.image!,
+        caption: `Timbangan Bahan/Thaw: ${i.name} [${i.plannedFabrication || ''}]`,
+        category: 'Timbangan',
+        uploadedAt: i.createdAt || new Date().toISOString(),
+      });
+    });
+
+    const finalizedReport: DailyClosingReport = {
+      id: `rep_unified_${currentStore.id}_${selectedDate}_${Date.now()}`,
+      storeId: currentStore.id,
+      storeName: currentStore.name,
+      date: selectedDate,
+      totalThawingQty: allItemsForDate.length,
+      totalProcessedQty: storeSegsForDate.length,
+      totalWeightBeforeThawing: totalRaw,
+      totalWeightAfterThawing: totalThawed,
+      totalWeightAfterFabrication: totalFab,
+      totalThawingLoss: totalThawLoss,
+      totalFabricationLoss: totalFabLoss,
+      totalProcessLoss: allProcessLoss,
+      totalSusutJual: allSusutJual,
+      totalSalesKg: totalSales,
+      carryoverOpeningStockKg: carryoverOpening,
+      currentClosingStockKg: currentClosing,
+      financialLossRupiah: (allProcessLoss + allSusutJual) * 102000,
+      butcherInCharge: 'Petugas Butcher',
+      adminInCharge: currentUser.fullName,
+      isClosed: true,
+      closedAt: new Date().toISOString(),
+      closingPlanRecords: allClosingsForDate,
+      itemsProcessed: allItemsForDate.map((i) => ({
+        id: i.id,
+        name: i.name,
+        plannedFabrication: i.plannedFabrication,
+        pabrikasiCategory: i.pabrikasiCategory,
+        weightBefore: i.weightBeforeThawing,
+        weightAfter: i.weightAfterThawing || i.weightBeforeThawing,
+        finalWeight: i.weightAfterThawing || i.weightBeforeThawing,
+        thawingLossPercent: i.shrinkageThawingPercent || 0,
+        fabLossPercent: 0,
+        salesKg: i.salesKg || 0,
+        openingStockKg: i.isCarryover ? i.weightBeforeThawing : 0,
+        isCarryover: i.isCarryover,
+      })),
+      photos: allPhotos,
+    };
+
+    if (onSaveDailyReport) {
+      onSaveDailyReport(finalizedReport);
+    }
+    upsertRecordToSheets('daily_closing_reports', finalizedReport);
+
     setClosingInputMsg({
       type: 'success',
-      text: `Data closing "${reportPlanName}" untuk tanggal ${selectedDate} berhasil disimpan!`,
+      text: `Data terpadu "${effectivePlan}" tanggal ${selectedDate} berhasil disimpan! Data bahan (${validBahan.length} item), closing fisik (${sisaFisikNum.toFixed(3)} Kg), susut proses (${susutProsesKg.toFixed(3)} Kg) & susut jual (${susutJualKg.toFixed(3)} Kg) otomatis tersimpan dan terhubung ke Riwayat Harian, Laporan Excel & Google Spreadsheet!`,
     });
-    setTimeout(() => setClosingInputMsg(null), 4000);
 
-    // Refresh daily report in history
-    if (onSaveDailyReport) {
-      setTimeout(() => {
-        handleFinalizeReportForDate();
-      }, 300);
-    }
-
-    // Reset form
+    // Reset Form
     setEditingClosingId(null);
-    setReportOpeningStock('');
-    setReportNewProcessed('');
-    setReportSales('');
-    setReportActualStock('');
-    setReportNote('');
-    setReportPhoto('');
-  };
-
-  // Submit Past Raw Material (Admin)
-  const handleSavePastMaterial = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!onAddItem) {
-      setMatMsg({ type: 'error', text: 'Handler tambah bahan belum tersedia.' });
-      return;
-    }
-    if (!matName.trim()) {
-      setMatMsg({ type: 'error', text: 'Nama bahan tidak boleh kosong.' });
-      return;
-    }
-    const wBefore = parseFloat(matWeightBefore) || 0;
-    if (wBefore <= 0) {
-      setMatMsg({ type: 'error', text: 'Berat awal beku harus lebih besar dari 0.' });
-      return;
-    }
-    const wAfter = parseFloat(matWeightAfter) || wBefore;
-    const susutProsesKg = Math.max(0, wBefore - wAfter);
-    const lossPct = wBefore > 0 ? (susutProsesKg / wBefore) * 100 : 0;
-    const effectivePlan = matPlanSelect === 'CUSTOM' ? (matCustomPlan.trim() || 'D.sapi pot. rdang') : matPlanSelect;
-    const effectiveCategory = matCategory || 'DAGING FRESH';
-    const timestampStr = `${selectedDate}T08:00:00.000Z`;
-
-    // 1. Tambahkan ke daftar bahan masuk dengan status 'pabrikasi_done' (TIDAK KEMBALI KE ANTRIAN THAWING)
-    onAddItem({
-      name: matName.trim(),
-      pabrikasiCategory: effectiveCategory,
-      plannedFabrication: effectivePlan,
-      weightBeforeThawing: wBefore,
-      weightAfterThawing: wAfter,
-      shrinkageThawing: susutProsesKg,
-      shrinkageThawingPercent: lossPct,
-      openingPurpose: 'UNTUK DISPLAY',
-      status: 'pabrikasi_done',
-      thawingStartTime: timestampStr,
-      thawingEndTime: `${selectedDate}T09:00:00.000Z`,
-      createdAt: timestampStr,
-      storeId: currentStore.id,
-      isCarryover: false,
-      image: matPhoto || '',
-    });
-
-    // 2. Langsung terhitung susut proses dan masuk di daftar data closing
-    if (onSaveClosingRecord) {
-      const existingRec = (closingRecords || []).find(
-        (c) =>
-          matchStoreEntity(c.storeId, currentStore) &&
-          (c.date || c.timestamp || '').startsWith(selectedDate) &&
-          (c.planName.toLowerCase() === effectivePlan.toLowerCase() ||
-            c.planName.toLowerCase() === effectivePlan.replace(/ \(.*\)/, '').toLowerCase())
-      );
-
-      if (existingRec) {
-        const updatedNewProc = parseFloat(((existingRec.newProcessedKg || 0) + wAfter).toFixed(3));
-        const totalAvail = (existingRec.openingStockKg || 0) + updatedNewProc + (existingRec.adjustInKg || 0) - (existingRec.adjustOutKg || 0);
-        const closingBySys = Math.max(0, totalAvail - (existingRec.salesKg || 0));
-        const susutJual = Math.max(0, closingBySys - (existingRec.actualClosingStockKg || 0));
-
-        onSaveClosingRecord({
-          ...existingRec,
-          newProcessedKg: updatedNewProc,
-          closingStockBySystemKg: parseFloat(closingBySys.toFixed(3)),
-          susutJualKg: parseFloat(susutJual.toFixed(3)),
-          photoUrl: matPhoto || existingRec.photoUrl || '',
-          note: `${existingRec.note || ''} | Masuk Bahan Terlewat: ${matName.trim()} (+${wAfter.toFixed(3)} Kg)`,
-        });
-      } else {
-        const recId = getDeterministicClosingRecordId(currentStore.id, effectivePlan, selectedDate);
-        onSaveClosingRecord({
-          id: recId,
-          storeId: currentStore.id,
-          date: selectedDate,
-          planName: effectivePlan,
-          category: effectiveCategory,
-          openingStockKg: 0,
-          newProcessedKg: parseFloat(wAfter.toFixed(3)),
-          adjustInKg: 0,
-          adjustOutKg: 0,
-          salesKg: 0,
-          closingStockBySystemKg: parseFloat(wAfter.toFixed(3)),
-          actualClosingStockKg: 0,
-          susutJualKg: parseFloat(wAfter.toFixed(3)),
-          butcherName: `${currentUser.fullName} (Input Bahan Terlewat)`,
-          note: `Bahan terlewat: ${matName.trim()} (Beku: ${wBefore.toFixed(3)} Kg -> Thaw: ${wAfter.toFixed(3)} Kg, Susut Proses: ${susutProsesKg.toFixed(3)} Kg)`,
-          photoUrl: matPhoto || '',
-        });
-      }
-    }
-
-    // 3. Langsung terintegrasi ke riwayat laporan
-    if (onSaveDailyReport) {
-      setTimeout(() => {
-        handleFinalizeReportForDate();
-      }, 300);
-    }
-
-    setMatMsg({
-      type: 'success',
-      text: `Bahan "${matName}" berhasil disimpan! Susut proses ${susutProsesKg.toFixed(3)} Kg (${lossPct.toFixed(2)}%) langsung terhitung, masuk daftar closing & terintegrasi ke riwayat laporan.`,
-    });
-    setTimeout(() => setMatMsg(null), 5000);
-
-    setMatName('');
-    setMatWeightBefore('');
-    setMatWeightAfter('');
-    setMatPhoto('');
+    setUnifiedBahanList([{ id: `b_${Date.now()}`, bahan: '', tally: '', netto: '', foto: '' }]);
+    setUnifiedSisaKemarin('');
+    setUnifiedPenjualanSales('');
+    setUnifiedTimbanganSisaFisik('');
+    setUnifiedFotoClosing('');
+    setUnifiedNotes('');
   };
 
   // Delete Closing Record with Undo
@@ -914,729 +1019,541 @@ export default function AdminTokoView({
             </div>
           )}
 
-          {matMsg && (
-            <div
-              className={`p-3.5 rounded-xl text-xs font-bold flex items-center gap-2 ${
-                matMsg.type === 'success'
-                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-300'
-                  : 'bg-red-50 text-red-900 border border-red-300'
-              }`}
-            >
-              {matMsg.type === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-              )}
-              <span>{matMsg.text}</span>
-            </div>
-          )}
 
-          {/* Two Input Forms */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* FORM A: Input Data Closing Fisik */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+
+          {/* UNIFIED INPUT FORM (Rencana Potong + Bahan + Closing) */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 shadow-xs">
+            {/* Form Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-5 border-b border-slate-100">
+              <div>
                 <div className="flex items-center gap-2">
-                  <Package className="w-4 h-4 text-blue-700" />
-                  <h3 className="text-sm font-black text-slate-900">
-                    {editingClosingId ? 'Koreksi Data Closing' : '1. Input Data Closing Daging'}
+                  <span className="p-1.5 bg-blue-100 text-blue-700 rounded-lg">
+                    <Layers className="w-5 h-5" />
+                  </span>
+                  <h3 className="text-base font-black text-slate-900">
+                    {editingClosingId ? 'Koreksi Data Rencana Potong, Bahan & Closing' : 'Input Rencana Potong, Bahan & Closing'}
                   </h3>
                 </div>
-                <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                  Tgl: {selectedDate}
-                </span>
+                <p className="text-xs text-slate-500 mt-1">
+                  Alur satu pintu: Rencana potong, bahan baku (tally & netto), sisa kemarin, penjualan, dan timbangan fisik closing.
+                </p>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold bg-blue-50 text-blue-800 border border-blue-200 px-3 py-1 rounded-lg">
+                  Tanggal: {selectedDate}
+                </span>
+                {editingClosingId && (
+                  <span className="text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 rounded-lg animate-pulse">
+                    Mode Koreksi
+                  </span>
+                )}
+              </div>
+            </div>
 
-              <form onSubmit={handleSavePastClosing} className="space-y-3.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Pilih Rencana Potong / Nama Item
+            <form onSubmit={handleUnifiedSubmit} className="space-y-5">
+              {/* STEP 1: INPUT RENCANA POTONG */}
+              <div className="bg-slate-50/90 border border-slate-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-black text-slate-900 flex items-center gap-1.5 uppercase tracking-wide">
+                    <Package className="w-4 h-4 text-blue-700" />
+                    Input Rencana Potong
                   </label>
-                  <select
-                    value={reportPlanName}
-                    onChange={(e) => {
-                      setReportPlanName(e.target.value);
-                      const std = STANDARD_PLANS.find((p) => p.name === e.target.value);
-                      if (std) setReportCategory(std.category);
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500"
-                  >
-                    {STANDARD_PLANS.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name} ({p.category})
-                      </option>
-                    ))}
-                    <option value="CUSTOM">-- Item Kustom Lainnya --</option>
-                  </select>
+                  <span className="text-[11px] font-bold text-slate-600 bg-white px-2.5 py-0.5 rounded-md border border-slate-200">
+                    Kategori: <strong className="text-blue-700">{unifiedCategory}</strong>
+                  </span>
                 </div>
 
-                {reportPlanName === 'CUSTOM' && (
+                <div className="space-y-3">
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Ketik Nama Rencana Potong Kustom
+                      Rencana Potong
                     </label>
-                    <input
-                      type="text"
-                      placeholder="Contoh: TETELAN SPESIAL"
-                      onChange={(e) => setReportPlanName(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                    />
+                    <select
+                      value={unifiedPlanSelect}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setUnifiedPlanSelect(val);
+                        if (val !== 'CUSTOM') {
+                          const std = STANDARD_PLANS.find((p) => p.name === val);
+                          if (std) setUnifiedCategory(std.category);
+                        }
+                      }}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500"
+                    >
+                      {STANDARD_PLANS.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name} ({p.category})
+                        </option>
+                      ))}
+                      <option value="CUSTOM">-- Item Kustom Lainnya --</option>
+                    </select>
                   </div>
-                )}
 
-                <div className="grid grid-cols-2 gap-3">
+                  {unifiedPlanSelect === 'CUSTOM' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          Ketik Rencana Potong Kustom
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Contoh: TETELAN SPESIAL"
+                          value={unifiedCustomPlan}
+                          onChange={(e) => setUnifiedCustomPlan(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 shadow-xs"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          Kategori Pabrikasi
+                        </label>
+                        <select
+                          value={unifiedCategory}
+                          onChange={(e) => setUnifiedCategory(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 shadow-xs"
+                        >
+                          <option value="DAGING FRESH">DAGING FRESH</option>
+                          <option value="SHANKLE">SHANKLE</option>
+                          <option value="DAGING PREMIUM">DAGING PREMIUM</option>
+                          <option value="RAWON">RAWON</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* STEP 2: INPUT BAHAN */}
+              <div className="bg-slate-50/90 border border-slate-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-xs font-black text-slate-900 flex items-center gap-1.5 uppercase tracking-wide">
+                    <Beef className="w-4 h-4 text-emerald-700" />
+                    Input Bahan
+                  </label>
+                  <span className="text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-md">
+                    {unifiedBahanList.length} Bahan
+                  </span>
+                </div>
+
+                <div className="space-y-4">
+                  {unifiedBahanList.map((bItem, idx) => {
+                    const bTally = parseFloat(bItem.tally) || 0;
+                    const bNetto = parseFloat(bItem.netto) || 0;
+                    const bSusut = Math.max(0, bTally - bNetto);
+                    const bSusutPct = bTally > 0 ? (bSusut / bTally) * 100 : 0;
+
+                    return (
+                      <div
+                        key={bItem.id}
+                        className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs relative"
+                      >
+                        <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-100">
+                          <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                            <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-[10px] font-bold">
+                              {idx + 1}
+                            </span>
+                            Bahan {idx + 1}
+                          </span>
+
+                          {unifiedBahanList.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBahanRow(bItem.id)}
+                              className="text-[11px] text-red-600 hover:text-red-800 font-bold flex items-center gap-1 cursor-pointer transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Hapus Bahan
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              Bahan (Nama Bahan Baku / Thawing)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Contoh: HQ 41/42/44/45 atau FRIBOY"
+                              value={bItem.bahan}
+                              onChange={(e) => handleUpdateBahanRow(bItem.id, 'bahan', e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                Tally (Berat Awal Beku) [Kg]
+                              </label>
+                              <input
+                                type="number"
+                                step="0.001"
+                                placeholder="0.000"
+                                value={bItem.tally}
+                                onChange={(e) => handleUpdateBahanRow(bItem.id, 'tally', e.target.value)}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                Netto (Berat Setelah Thaw) [Kg]
+                              </label>
+                              <input
+                                type="number"
+                                step="0.001"
+                                placeholder="0.000"
+                                value={bItem.netto}
+                                onChange={(e) => handleUpdateBahanRow(bItem.id, 'netto', e.target.value)}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                Susut (Otomatis: Tally - Netto)
+                              </label>
+                              <div className="w-full px-3 py-2 bg-amber-50/70 border border-amber-200 rounded-xl text-xs font-mono font-bold text-amber-900 flex items-center justify-between">
+                                <span>{bSusut.toFixed(3)} Kg</span>
+                                <span className="text-[10px] text-amber-700">({bSusutPct.toFixed(2)}%)</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Input Foto Bahan */}
+                          <div>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                                <Camera className="w-3.5 h-3.5 text-emerald-600" />
+                                Input Foto (Timbangan Netto / Thaw)
+                              </label>
+                              {bItem.foto && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateBahanRow(bItem.id, 'foto', '')}
+                                  className="text-[10px] text-red-600 hover:underline flex items-center gap-0.5 cursor-pointer font-bold"
+                                >
+                                  <X className="w-3 h-3" /> Hapus Foto
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="border-2 border-dashed border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50/70 rounded-xl p-3 text-center relative transition">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                onChange={(e) => handleBahanPhotoUpload(e, bItem.id)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                disabled={bItem.isOptimizingPhoto}
+                              />
+                              {bItem.isOptimizingPhoto ? (
+                                <div className="py-2 flex items-center justify-center gap-2 text-emerald-700 text-xs font-bold">
+                                  <RefreshCw className="w-4 h-4 animate-spin" />
+                                  Mengompres Foto...
+                                </div>
+                              ) : bItem.foto ? (
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex items-center gap-2.5 text-left">
+                                    <img
+                                      src={bItem.foto}
+                                      alt="Bukti Thawing"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setZoomedPhotoUrl({ url: bItem.foto, title: `Bukti Timbangan Thaw: ${bItem.bahan || unifiedPlanSelect}` });
+                                      }}
+                                      className="h-12 w-12 object-cover rounded-lg border border-emerald-300 shadow-xs cursor-pointer hover:opacity-85"
+                                      title="Klik untuk perbesar"
+                                    />
+                                    <div>
+                                      <span className="text-xs font-bold text-emerald-900 flex items-center gap-1">
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" /> Foto Timbangan Terlampir
+                                      </span>
+                                      <span className="text-[10px] text-slate-500 block">Klik untuk ganti atau perbesar</span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setZoomedPhotoUrl({ url: bItem.foto, title: `Bukti Timbangan Thaw: ${bItem.bahan || unifiedPlanSelect}` });
+                                    }}
+                                    className="px-2.5 py-1 bg-white border border-emerald-200 rounded-lg text-[10px] font-bold text-emerald-700 hover:bg-emerald-50 shadow-xs z-20 cursor-pointer flex items-center gap-1"
+                                  >
+                                    <ZoomIn className="w-3 h-3" /> Perbesar
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="py-1.5">
+                                  <Upload className="w-4 h-4 text-emerald-600 mx-auto mb-1" />
+                                  <p className="text-xs font-bold text-slate-800">Tambahkan Foto Timbangan Netto</p>
+                                  <p className="text-[10px] text-slate-500 mt-0.5">Ambil foto timbangan daging setelah thawing (Kamera / Galeri)</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* (tambah bahan) button */}
+                  <button
+                    type="button"
+                    onClick={handleAddBahanRow}
+                    className="w-full py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100 border-2 border-dashed border-emerald-300 text-emerald-800 font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition active:scale-95 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    (Tambah Bahan)
+                  </button>
+                </div>
+              </div>
+
+              {/* STEP 3: SISA KEMARIN & PENJUALAN (SALES) */}
+              <div className="bg-slate-50/90 border border-slate-200 rounded-xl p-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    <label className="block text-xs font-black text-slate-900 mb-1 uppercase tracking-wide">
                       Sisa Kemarin (Stok Awal) [Kg]
                     </label>
                     <input
                       type="number"
                       step="0.001"
                       placeholder="0.000"
-                      value={reportOpeningStock}
-                      onChange={(e) => setReportOpeningStock(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
+                      value={unifiedSisaKemarin}
+                      onChange={(e) => setUnifiedSisaKemarin(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500"
                     />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Stok sisa display atau carryover dari hari kemarin.
+                    </p>
                   </div>
+
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Diolah Baru Hari Itu [Kg]
+                    <label className="block text-xs font-black text-slate-900 mb-1 uppercase tracking-wide">
+                      Penjualan (Sales) [Kg]
                     </label>
                     <input
                       type="number"
                       step="0.001"
                       placeholder="0.000"
-                      value={reportNewProcessed}
-                      onChange={(e) => setReportNewProcessed(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
+                      value={unifiedPenjualanSales}
+                      onChange={(e) => setUnifiedPenjualanSales(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-emerald-800 shadow-xs focus:ring-2 focus:ring-emerald-500"
                     />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Total berat daging yang terjual riil kepada pelanggan.
+                    </p>
                   </div>
                 </div>
+              </div>
 
-                <div className="grid grid-cols-2 gap-3">
+              {/* STEP 4: TIMBANGAN SISA FISIK CLOSING & INPUT FOTO */}
+              <div className="bg-slate-50/90 border border-slate-200 rounded-xl p-4">
+                <div className="space-y-3">
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Penjualan Real (Sales) [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={reportSales}
-                      onChange={(e) => setReportSales(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-emerald-700 focus:bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    <label className="block text-xs font-black text-slate-900 mb-1 uppercase tracking-wide">
                       Timbangan Sisa Fisik Closing [Kg]
                     </label>
                     <input
                       type="number"
                       step="0.001"
                       placeholder="0.000"
-                      value={reportActualStock}
-                      onChange={(e) => setReportActualStock(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-blue-800 focus:bg-white"
+                      value={unifiedTimbanganSisaFisik}
+                      onChange={(e) => setUnifiedTimbanganSisaFisik(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-blue-900 shadow-xs focus:ring-2 focus:ring-blue-500"
                     />
-                  </div>
-                </div>
-
-                {/* Calculation summary */}
-                <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[11px] space-y-1">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Total Tersedia:</span>
-                    <span className="font-mono font-bold">
-                      {((parseFloat(reportOpeningStock) || 0) + (parseFloat(reportNewProcessed) || 0)).toFixed(3)} Kg
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>Sisa Sistem (Sebelum Fisik):</span>
-                    <span className="font-mono font-bold">
-                      {Math.max(0, ((parseFloat(reportOpeningStock) || 0) + (parseFloat(reportNewProcessed) || 0)) - (parseFloat(reportSales) || 0)).toFixed(3)} Kg
-                    </span>
-                  </div>
-                  <div className="flex justify-between font-bold text-amber-900 pt-1 border-t border-slate-200">
-                    <span>Estimasi Susut Jual:</span>
-                    <span className="font-mono">
-                      {Math.max(0, Math.max(0, ((parseFloat(reportOpeningStock) || 0) + (parseFloat(reportNewProcessed) || 0)) - (parseFloat(reportSales) || 0)) - (parseFloat(reportActualStock) || 0)).toFixed(3)} Kg
-                    </span>
-                  </div>
-                </div>
-
-                {/* Form Tambahkan Foto Timbangan Sisa Fisik Closing */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                      <Camera className="w-3.5 h-3.5 text-blue-600" />
-                      Foto Timbangan Sisa Fisik Closing
-                    </label>
-                    {reportPhoto && (
-                      <button
-                        type="button"
-                        onClick={() => setReportPhoto('')}
-                        className="text-[10px] text-red-600 hover:underline flex items-center gap-0.5 cursor-pointer font-bold"
-                      >
-                        <X className="w-3 h-3" /> Hapus Foto
-                      </button>
-                    )}
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Hasil timbang fisik nyata di chiller display saat penutupan (closing).
+                    </p>
                   </div>
 
-                  <div className="border-2 border-dashed border-blue-200 bg-blue-50/40 hover:bg-blue-50/70 rounded-xl p-3 text-center relative transition">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      onChange={(e) => handlePhotoUpload(e, setReportPhoto, setIsOptimizingReportPhoto)}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      disabled={isOptimizingReportPhoto}
-                    />
-                    {isOptimizingReportPhoto ? (
-                      <div className="py-2 flex items-center justify-center gap-2 text-blue-700 text-xs font-bold">
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Mengompres & Memproses Foto...
-                      </div>
-                    ) : reportPhoto ? (
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5 text-left">
-                          <img
-                            src={reportPhoto}
-                            alt="Bukti Closing"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setZoomedPhotoUrl({ url: reportPhoto, title: `Bukti Sisa Fisik Closing: ${reportPlanName}` });
-                            }}
-                            className="h-12 w-12 object-cover rounded-lg border border-blue-300 shadow-xs cursor-pointer hover:opacity-85"
-                            title="Klik untuk perbesar"
-                          />
-                          <div>
-                            <span className="text-xs font-bold text-blue-900 block flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" /> Foto Timbangan Terlampir
-                            </span>
-                            <span className="text-[10px] text-slate-500 block">Klik untuk ganti atau perbesar</span>
-                          </div>
-                        </div>
+                  {/* Input Foto Closing */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                        <Camera className="w-3.5 h-3.5 text-blue-600" />
+                        Input Foto (Timbangan Sisa Fisik Closing)
+                      </label>
+                      {unifiedFotoClosing && (
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setZoomedPhotoUrl({ url: reportPhoto, title: `Bukti Sisa Fisik Closing: ${reportPlanName}` });
-                          }}
-                          className="px-2.5 py-1 bg-white border border-blue-200 rounded-lg text-[10px] font-bold text-blue-700 hover:bg-blue-50 shadow-xs z-20 cursor-pointer flex items-center gap-1"
+                          onClick={() => setUnifiedFotoClosing('')}
+                          className="text-[10px] text-red-600 hover:underline flex items-center gap-0.5 cursor-pointer font-bold"
                         >
-                          <ZoomIn className="w-3 h-3" /> Perbesar
+                          <X className="w-3 h-3" /> Hapus Foto
                         </button>
-                      </div>
-                    ) : (
-                      <div className="py-2">
-                        <Upload className="w-5 h-5 text-blue-500 mx-auto mb-1" />
-                        <p className="text-xs font-bold text-slate-800">Tambahkan Foto Timbangan Sisa Fisik</p>
-                        <p className="text-[10px] text-slate-500 mt-0.5">Ambil foto timbangan jarum/digital sisa fisik closing (Kamera / Galeri)</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                      )}
+                    </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Catatan / Alasan Input
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Contoh: Input susulan sisa display chiller"
-                    value={reportNote}
-                    onChange={(e) => setReportNote(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 px-4 bg-blue-700 hover:bg-blue-800 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition active:scale-95 cursor-pointer"
-                  >
-                    <Save className="w-4 h-4" />
-                    {editingClosingId ? 'Simpan Perubahan Closing' : 'Simpan Data Closing'}
-                  </button>
-                  {editingClosingId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingClosingId(null);
-                        setReportOpeningStock('');
-                        setReportNewProcessed('');
-                        setReportSales('');
-                        setReportActualStock('');
-                        setReportNote('');
-                        setReportPhoto('');
-                      }}
-                      className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
-                    >
-                      Batal
-                    </button>
-                  )}
-                </div>
-              </form>
-            </div>
-
-            {/* FORM B: Input Bahan Baku / Thawing Terlewat */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <Plus className="w-4 h-4 text-emerald-700" />
-                  <h3 className="text-sm font-black text-slate-900">
-                    2. Input Bahan Baku Masuk Terlewat
-                  </h3>
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                  Tgl: {selectedDate}
-                </span>
-              </div>
-
-              <form onSubmit={handleSavePastMaterial} className="space-y-3.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Nama Bahan Baku (Thawing)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Contoh: HQ 41/42/44/45 atau FRIBOY"
-                    value={matName}
-                    onChange={(e) => setMatName(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
-                    required
-                  />
-                </div>
-
-                {/* Tampilan Rencana Potong sama seperti Form A Input Data Closing */}
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Pilih Rencana Potong / Nama Item
-                  </label>
-                  <select
-                    value={matPlanSelect}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setMatPlanSelect(val);
-                      if (val !== 'CUSTOM') {
-                        setMatPlan(val);
-                        const std = STANDARD_PLANS.find((p) => p.name === val);
-                        if (std) setMatCategory(std.category);
-                      }
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
-                  >
-                    {STANDARD_PLANS.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name} ({p.category})
-                      </option>
-                    ))}
-                    <option value="CUSTOM">-- Item Kustom Lainnya --</option>
-                  </select>
-                </div>
-
-                {matPlanSelect === 'CUSTOM' ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        Ketik Rencana Potong Kustom
-                      </label>
+                    <div className="border-2 border-dashed border-blue-200 bg-blue-50/40 hover:bg-blue-50/70 rounded-xl p-3 text-center relative transition">
                       <input
-                        type="text"
-                        placeholder="Contoh: TETELAN SPESIAL"
-                        value={matCustomPlan}
-                        onChange={(e) => {
-                          setMatCustomPlan(e.target.value);
-                          setMatPlan(e.target.value);
-                        }}
-                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                        required
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={(e) => handlePhotoUpload(e, setUnifiedFotoClosing, setIsOptimizingClosingPhoto)}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                        disabled={isOptimizingClosingPhoto}
                       />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        Kategori Pabrikasi
-                      </label>
-                      <select
-                        value={matCategory}
-                        onChange={(e) => setMatCategory(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                      >
-                        <option value="DAGING FRESH">DAGING FRESH</option>
-                        <option value="SHANKLE">SHANKLE</option>
-                        <option value="DAGING PREMIUM">DAGING PREMIUM</option>
-                        <option value="RAWON">RAWON</option>
-                      </select>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between px-3 py-1.5 bg-emerald-50/50 rounded-lg border border-emerald-100 text-[11px]">
-                    <span className="text-slate-600">Kategori Pabrikasi Terhubung:</span>
-                    <span className="font-bold text-emerald-800">{matCategory}</span>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Berat Awal Beku [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={matWeightBefore}
-                      onChange={(e) => setMatWeightBefore(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                      Berat Setelah Thaw [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={matWeightAfter}
-                      onChange={(e) => setMatWeightAfter(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:bg-white"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* Perhitungan Langsung Susut Proses */}
-                {parseFloat(matWeightBefore) > 0 && (
-                  <div className="bg-emerald-50/80 border border-emerald-200 p-3 rounded-xl text-[11px] space-y-1">
-                    <div className="flex justify-between text-emerald-800">
-                      <span>Berat Awal Beku:</span>
-                      <span className="font-mono font-bold">{parseFloat(matWeightBefore).toFixed(3)} Kg</span>
-                    </div>
-                    <div className="flex justify-between text-emerald-800">
-                      <span>Hasil Bersih Thawing:</span>
-                      <span className="font-mono font-bold">{(parseFloat(matWeightAfter) || parseFloat(matWeightBefore)).toFixed(3)} Kg</span>
-                    </div>
-                    <div className="flex justify-between font-bold text-emerald-950 pt-1 border-t border-emerald-200">
-                      <span>Susut Proses Thawing:</span>
-                      <span className="font-mono font-bold text-amber-800">
-                        {Math.max(0, parseFloat(matWeightBefore) - (parseFloat(matWeightAfter) || parseFloat(matWeightBefore))).toFixed(3)} Kg ({parseFloat(matWeightBefore) > 0 ? ((Math.max(0, parseFloat(matWeightBefore) - (parseFloat(matWeightAfter) || parseFloat(matWeightBefore))) / parseFloat(matWeightBefore)) * 100).toFixed(2) : '0.00'}%)
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Form Tambahkan Foto pada Menu Berat Setelah Thawing */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                      <Camera className="w-3.5 h-3.5 text-emerald-600" />
-                      Foto Timbangan Berat Setelah Thawing
-                    </label>
-                    {matPhoto && (
-                      <button
-                        type="button"
-                        onClick={() => setMatPhoto('')}
-                        className="text-[10px] text-red-600 hover:underline flex items-center gap-0.5 cursor-pointer font-bold"
-                      >
-                        <X className="w-3 h-3" /> Hapus Foto
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="border-2 border-dashed border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50/70 rounded-xl p-3 text-center relative transition">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      onChange={(e) => handlePhotoUpload(e, setMatPhoto, setIsOptimizingMatPhoto)}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      disabled={isOptimizingMatPhoto}
-                    />
-                    {isOptimizingMatPhoto ? (
-                      <div className="py-2 flex items-center justify-center gap-2 text-emerald-700 text-xs font-bold">
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Mengompres & Memproses Foto...
-                      </div>
-                    ) : matPhoto ? (
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5 text-left">
-                          <img
-                            src={matPhoto}
-                            alt="Bukti Thawing"
+                      {isOptimizingClosingPhoto ? (
+                        <div className="py-2 flex items-center justify-center gap-2 text-blue-700 text-xs font-bold">
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Mengompres Foto Closing...
+                        </div>
+                      ) : unifiedFotoClosing ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5 text-left">
+                            <img
+                              src={unifiedFotoClosing}
+                              alt="Bukti Closing"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setZoomedPhotoUrl({ url: unifiedFotoClosing, title: `Bukti Fisik Closing: ${unifiedPlanSelect}` });
+                              }}
+                              className="h-12 w-12 object-cover rounded-lg border border-blue-300 shadow-xs cursor-pointer hover:opacity-85"
+                              title="Klik untuk perbesar"
+                            />
+                            <div>
+                              <span className="text-xs font-bold text-blue-900 flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" /> Foto Closing Terlampir
+                              </span>
+                              <span className="text-[10px] text-slate-500 block">Klik untuk ganti atau perbesar</span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setZoomedPhotoUrl({ url: matPhoto, title: `Bukti Timbangan Thaw: ${matName || matPlan}` });
+                              setZoomedPhotoUrl({ url: unifiedFotoClosing, title: `Bukti Fisik Closing: ${unifiedPlanSelect}` });
                             }}
-                            className="h-12 w-12 object-cover rounded-lg border border-emerald-300 shadow-xs cursor-pointer hover:opacity-85"
-                            title="Klik untuk perbesar"
-                          />
-                          <div>
-                            <span className="text-xs font-bold text-emerald-900 block flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" /> Foto Timbangan Terlampir
-                            </span>
-                            <span className="text-[10px] text-slate-500 block">Klik untuk ganti atau perbesar</span>
-                          </div>
+                            className="px-2.5 py-1 bg-white border border-blue-200 rounded-lg text-[10px] font-bold text-blue-700 hover:bg-blue-50 shadow-xs z-20 cursor-pointer flex items-center gap-1"
+                          >
+                            <ZoomIn className="w-3 h-3" /> Perbesar
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setZoomedPhotoUrl({ url: matPhoto, title: `Bukti Timbangan Thaw: ${matName || matPlan}` });
-                          }}
-                          className="px-2.5 py-1 bg-white border border-emerald-200 rounded-lg text-[10px] font-bold text-emerald-700 hover:bg-emerald-50 shadow-xs z-20 cursor-pointer flex items-center gap-1"
-                        >
-                          <ZoomIn className="w-3 h-3" /> Perbesar
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="py-2">
-                        <Upload className="w-5 h-5 text-emerald-600 mx-auto mb-1" />
-                        <p className="text-xs font-bold text-slate-800">Tambahkan Foto Timbangan Setelah Thawing</p>
-                        <p className="text-[10px] text-slate-500 mt-0.5">Ambil foto timbangan netto daging setelah proses thawing (Kamera / Galeri)</p>
-                      </div>
-                    )}
+                      ) : (
+                        <div className="py-1.5">
+                          <Upload className="w-4 h-4 text-blue-600 mx-auto mb-1" />
+                          <p className="text-xs font-bold text-slate-800">Tambahkan Foto Timbangan Sisa Fisik</p>
+                          <p className="text-[10px] text-slate-500 mt-0.5">Ambil foto timbangan jarum/digital sisa fisik closing (Kamera / Galeri)</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition active:scale-95 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Simpan Bahan Masuk Tanggal {selectedDate}
-                  </button>
-                  <p className="text-[10px] text-slate-500 text-center mt-1.5">
-                    Otomatis hitung susut proses, masuk daftar closing & riwayat laporan (tidak kembali ke antrian thawing).
-                  </p>
+              {/* CATATAN TAMBAHAN (OPSIONAL) */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Catatan Tambahan (Opsional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Tambahan potongan dadu dari sisa display kemarin"
+                  value={unifiedNotes}
+                  onChange={(e) => setUnifiedNotes(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              {/* STEP 5: PERHITUNGAN OTOMATIS (LIVE REAL-TIME) */}
+              <div className="bg-slate-900 text-white rounded-2xl p-5 border border-slate-800 shadow-md">
+                <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-800">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                    <Calculator className="w-4 h-4 text-blue-400" />
+                    Perhitungan Otomatis (Live Real-Time)
+                  </h4>
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                    Otomatis Terisi
+                  </span>
                 </div>
-              </form>
-            </div>
-          </div>
 
-          {/* TABLE OF CLOSING RECORDS FOR SELECTED DATE */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-4 border-b border-slate-100">
-              <div>
-                <h3 className="text-sm font-black text-slate-900">
-                  Daftar Data Closing Tanggal {selectedDate}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Data yang diinput butcher atau admin pada tanggal ini. Anda dapat mengedit atau menghapus entri yang salah.
-                </p>
-              </div>
-              <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
-                {currentStoreClosing.length} Item Tercatat
-              </span>
-            </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+                  {/* Total Tersedia */}
+                  <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                      Total Tersedia
+                    </span>
+                    <span className="text-base sm:text-lg font-mono font-black text-white block mt-0.5">
+                      {totalTersediaKg.toFixed(3)} <span className="text-xs text-slate-400">Kg</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 block mt-1">
+                      Sisa Kemarin + Netto
+                    </span>
+                  </div>
 
-            {currentStoreClosing.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs">
-                Belum ada data closing untuk tanggal {selectedDate}. Silakan gunakan form di atas untuk mengisi data.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-700 border-b border-slate-200 font-bold">
-                      <th className="p-3">Rencana Potong</th>
-                      <th className="p-3">Kategori</th>
-                      <th className="p-3 text-right">Stok Awal</th>
-                      <th className="p-3 text-right">Diolah Baru</th>
-                      <th className="p-3 text-right">Penjualan</th>
-                      <th className="p-3 text-right">Sisa Fisik</th>
-                      <th className="p-3 text-right">Susut Jual</th>
-                      <th className="p-3 text-center">Foto Bukti Fisik</th>
-                      <th className="p-3">Diinput Oleh</th>
-                      <th className="p-3 text-center">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {currentStoreClosing.map((rec) => (
-                      <tr key={rec.id} className="hover:bg-slate-50 transition">
-                        <td className="p-3 font-bold text-slate-900">{rec.planName}</td>
-                        <td className="p-3 text-slate-600">{rec.category}</td>
-                        <td className="p-3 text-right font-mono">{(rec.openingStockKg || 0).toFixed(3)}</td>
-                        <td className="p-3 text-right font-mono">{(rec.newProcessedKg || 0).toFixed(3)}</td>
-                        <td className="p-3 text-right font-mono text-emerald-700 font-bold">{(rec.salesKg || 0).toFixed(3)}</td>
-                        <td className="p-3 text-right font-mono text-blue-700 font-bold">{(rec.actualClosingStockKg || 0).toFixed(3)}</td>
-                        <td className="p-3 text-right font-mono text-amber-700 font-bold">{(rec.susutJualKg || 0).toFixed(3)}</td>
-                        <td className="p-3 text-center">
-                          {rec.photoUrl ? (
-                            <button
-                              type="button"
-                              onClick={() => setZoomedPhotoUrl({ url: rec.photoUrl!, title: `Bukti Fisik Closing: ${rec.planName}` })}
-                              className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                              title="Klik untuk perbesar foto timbangan"
-                            >
-                              <img src={rec.photoUrl} alt="Foto" className="w-5 h-5 object-cover rounded" />
-                              <span>Lihat</span>
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-slate-300">-</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-slate-500 text-[11px]">{rec.butcherName}</td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingClosingId(rec.id);
-                                setReportPlanName(rec.planName);
-                                setReportCategory(rec.category);
-                                setReportOpeningStock(String(rec.openingStockKg || ''));
-                                setReportNewProcessed(String(rec.newProcessedKg || ''));
-                                setReportSales(String(rec.salesKg || ''));
-                                setReportActualStock(String(rec.actualClosingStockKg || ''));
-                                setReportNote(rec.note || '');
-                                setReportPhoto(rec.photoUrl || '');
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                              }}
-                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
-                              title="Edit / Koreksi"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteClosingWithUndo(rec)}
-                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                              title="Hapus (Dengan Opsi Undo)"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                  {/* Sisa Sistem */}
+                  <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                      Sisa Sistem
+                    </span>
+                    <span className="text-base sm:text-lg font-mono font-black text-blue-300 block mt-0.5">
+                      {sisaSistemKg.toFixed(3)} <span className="text-xs text-slate-400">Kg</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 block mt-1">
+                      Total Tersedia - Sales
+                    </span>
+                  </div>
 
-            {/* Finalize Action Banner */}
-            <div className="mt-6 pt-5 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-blue-50/50 p-4 rounded-xl">
-              <div>
-                <h4 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                  <FileCheck className="w-4 h-4 text-blue-700" />
-                  Segarkan & Simpan Laporan Excel Resmi
-                </h4>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  Setelah selesai mengoreksi data closing tanggal {selectedDate}, klik tombol ini agar laporan excel resmi langsung muncul di menu Riwayat Harian.
-                </p>
+                  {/* Susut Proses */}
+                  <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                      Susut Proses
+                    </span>
+                    <span className="text-base sm:text-lg font-mono font-black text-amber-300 block mt-0.5">
+                      {susutProsesKg.toFixed(3)} <span className="text-xs text-slate-400">Kg</span>
+                    </span>
+                    <span className="text-[10px] text-amber-400/90 block mt-1 font-bold">
+                      {susutProsesPct.toFixed(2)}% dari total tally
+                    </span>
+                  </div>
+
+                  {/* Susut Jual */}
+                  <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                      Susut Jual
+                    </span>
+                    <span className="text-base sm:text-lg font-mono font-black text-red-300 block mt-0.5">
+                      {susutJualKg.toFixed(3)} <span className="text-xs text-slate-400">Kg</span>
+                    </span>
+                    <span className="text-[10px] text-red-400/90 block mt-1 font-bold">
+                      {susutJualPct.toFixed(2)}% dari sisa sistem
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleFinalizeReportForDate}
-                className="px-5 py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-black text-xs rounded-xl shadow-md transition active:scale-95 flex items-center gap-2 cursor-pointer shrink-0"
-              >
-                <FileCheck className="w-4 h-4" />
-                Segarkan ke Riwayat Harian
-              </button>
-            </div>
-          </div>
+              {/* STEP 6: SIMPAN ACTION */}
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+                <button
+                  type="submit"
+                  className="w-full sm:flex-1 py-3 px-6 bg-blue-700 hover:bg-blue-800 text-white font-black text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 shadow-md transition active:scale-95 cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  {editingClosingId ? 'Simpan Perubahan Closing & Bahan' : 'Simpan'}
+                </button>
 
-          {/* TABLE OF PAST RAW MATERIALS FOR SELECTED DATE */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-4 border-b border-slate-100">
-              <div>
-                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                  <Beef className="w-4 h-4 text-emerald-600" />
-                  Daftar Bahan Baku Masuk Terlewat Tanggal {selectedDate}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Bahan masuk tanggal ini telah otomatis diproses, susut proses dihitung, dan diintegrasikan ke daftar closing tanpa masuk ke antrian thawing.
-                </p>
+                {editingClosingId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingClosingId(null);
+                      setUnifiedBahanList([{ id: `b_${Date.now()}`, bahan: '', tally: '', netto: '', foto: '' }]);
+                      setUnifiedSisaKemarin('');
+                      setUnifiedPenjualanSales('');
+                      setUnifiedTimbanganSisaFisik('');
+                      setUnifiedFotoClosing('');
+                      setUnifiedNotes('');
+                    }}
+                    className="w-full sm:w-auto py-3 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    Batal Koreksi
+                  </button>
+                )}
               </div>
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
-                {currentStoreItems.filter(i => !i.isCarryover).length} Bahan Tercatat
-              </span>
-            </div>
-
-            {currentStoreItems.filter(i => !i.isCarryover).length === 0 ? (
-              <div className="text-center py-6 text-slate-400 text-xs">
-                Belum ada bahan baku masuk terlewat yang diinput untuk tanggal {selectedDate}.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-700 border-b border-slate-200 font-bold">
-                      <th className="p-3">Nama Bahan Baku</th>
-                      <th className="p-3">Rencana Potong & Kategori</th>
-                      <th className="p-3 text-right">Berat Beku [Kg]</th>
-                      <th className="p-3 text-right">Hasil Thaw [Kg]</th>
-                      <th className="p-3 text-right text-amber-700">Susut Proses</th>
-                      <th className="p-3 text-center">Foto Timbangan Thaw</th>
-                      <th className="p-3 text-center">Status Alur</th>
-                      <th className="p-3 text-center">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {currentStoreItems.filter(i => !i.isCarryover).map((item) => {
-                      const susutKg = Math.max(0, (item.weightBeforeThawing || 0) - (item.weightAfterThawing || item.weightBeforeThawing || 0));
-                      const pct = (item.weightBeforeThawing || 0) > 0 ? (susutKg / item.weightBeforeThawing) * 100 : 0;
-                      return (
-                        <tr key={item.id} className="hover:bg-slate-50 transition">
-                          <td className="p-3 font-bold text-slate-900">{item.name}</td>
-                          <td className="p-3">
-                            <span className="font-bold text-slate-800 block">{item.plannedFabrication}</span>
-                            <span className="text-[10px] text-slate-500">{item.pabrikasiCategory || '-'}</span>
-                          </td>
-                          <td className="p-3 text-right font-mono font-bold">{(item.weightBeforeThawing || 0).toFixed(3)}</td>
-                          <td className="p-3 text-right font-mono text-emerald-700 font-bold">{(item.weightAfterThawing || item.weightBeforeThawing || 0).toFixed(3)}</td>
-                          <td className="p-3 text-right font-mono text-amber-700 font-bold">
-                            {susutKg.toFixed(3)} Kg ({pct.toFixed(2)}%)
-                          </td>
-                          <td className="p-3 text-center">
-                            {item.image ? (
-                              <button
-                                type="button"
-                                onClick={() => setZoomedPhotoUrl({ url: item.image, title: `Bukti Timbangan Thawing: ${item.name} (${item.plannedFabrication})` })}
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                                title="Klik untuk perbesar foto timbangan thawing"
-                              >
-                                <img src={item.image} alt="Foto Thawing" className="w-5 h-5 object-cover rounded" />
-                                <span>Lihat</span>
-                              </button>
-                            ) : (
-                              <span className="text-[10px] text-slate-300">-</span>
-                            )}
-                          </td>
-                          <td className="p-3 text-center">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              <CheckCircle2 className="w-3 h-3" />
-                              Closing Terupdate
-                            </span>
-                          </td>
-                          <td className="p-3 text-center">
-                            {onDeleteItem && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (confirm(`Hapus entri bahan masuk "${item.name}"?`)) {
-                                    onDeleteItem(item.id);
-                                    setTimeout(() => handleFinalizeReportForDate(), 500);
-                                  }
-                                }}
-                                className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                                title="Hapus Bahan Masuk"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            </form>
           </div>
         </div>
       )}
