@@ -1189,7 +1189,18 @@ async function startServer() {
         console.warn('Postgres fetch closing records error:', err);
       }
     }
-    const filtered = storeId ? inMemoryStore.closingPlanRecords.filter((r) => !r.storeId || r.storeId === storeId) : inMemoryStore.closingPlanRecords;
+    const filtered = storeId
+      ? inMemoryStore.closingPlanRecords.filter((r) => {
+          if (!r.storeId) return true;
+          if (r.storeId === storeId) return true;
+          const s1 = String(r.storeId).toLowerCase();
+          const s2 = String(storeId).toLowerCase();
+          return (
+            (s1 === '1' || s1 === 'store_ckr' || s1 === 'ckr') &&
+            (s2 === '1' || s2 === 'store_ckr' || s2 === 'ckr')
+          );
+        })
+      : inMemoryStore.closingPlanRecords;
     res.json(filtered);
   });
 
@@ -1238,17 +1249,24 @@ async function startServer() {
           console.error('Postgres save closing records error:', dbErr);
         }
       }
-      if (Array.isArray(req.body)) {
-        inMemoryStore.closingPlanRecords = req.body;
-      } else {
-        const r = req.body;
-        const idx = inMemoryStore.closingPlanRecords.findIndex((item) => item.id === r.id || (item.storeId === r.storeId && item.planName === r.planName && item.date === r.date));
+      
+      const incomingList = Array.isArray(req.body) ? req.body : [req.body];
+      incomingList.forEach((r: any) => {
+        if (!r) return;
+        const rPlan = (r.planName || '').toLowerCase().trim();
+        const rDate = (r.date || '').split('T')[0];
+        const idx = inMemoryStore.closingPlanRecords.findIndex((item: any) => {
+          if (r.id && item.id && item.id === r.id) return true;
+          const iPlan = (item.planName || '').toLowerCase().trim();
+          const iDate = (item.date || '').split('T')[0];
+          return iPlan && rPlan && iPlan === rPlan && (!iDate || !rDate || iDate === rDate);
+        });
         if (idx >= 0) {
           inMemoryStore.closingPlanRecords[idx] = { ...inMemoryStore.closingPlanRecords[idx], ...r };
         } else {
           inMemoryStore.closingPlanRecords.unshift(r);
         }
-      }
+      });
       syncToSheetsBackend('Closing_Fisik', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
     } catch (err: any) {
