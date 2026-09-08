@@ -141,12 +141,8 @@ export default function AdminTokoView({
     return Array.from(datesSet).sort().reverse();
   }, [items, closingRecords]);
 
-  // Initialize selectedDate to today or the latest available date with data
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    if (availableDatesWithData.includes(todayIso)) return todayIso;
-    if (availableDatesWithData.length > 0) return availableDatesWithData[0];
-    return todayIso;
-  });
+  // Initialize selectedDate to today
+  const [selectedDate, setSelectedDate] = useState<string>(todayIso);
 
   // Standard Cuts List
   const STANDARD_PLANS = [
@@ -906,38 +902,18 @@ export default function AdminTokoView({
               className="bg-transparent text-white border-none focus:outline-none text-xs"
             />
           </div>
-          {availableDatesWithData.length > 0 && (
-            <div className="flex items-center gap-1">
-              {availableDatesWithData.slice(0, 3).map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setSelectedDate(d)}
-                  className={`px-2 py-1 rounded text-[11px] font-bold transition ${
-                    selectedDate === d
-                      ? 'bg-blue-500 text-white shadow-xs'
-                      : 'bg-blue-900/60 text-blue-200 hover:bg-blue-800'
-                  }`}
-                >
-                  {d === todayIso ? 'Hari Ini' : d}
-                </button>
-              ))}
-            </div>
-          )}
-          {onPurgeDate && availableDatesWithData.includes(selectedDate) && (
-            <button
-              onClick={() => {
-                if (window.confirm(`Hapus seluruh data transaksi untuk tanggal ${selectedDate}?`)) {
-                  onPurgeDate(selectedDate);
-                  setSelectedDate(todayIso);
-                }
-              }}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-red-950/60 hover:bg-red-800 text-red-200 border border-red-700/50 rounded-lg text-xs font-bold transition active:scale-95"
-              title={`Hapus seluruh data pada tanggal ${selectedDate}`}
-            >
-              <Trash2 className="w-3.5 h-3.5 text-red-400" />
-              Hapus Data Tgl
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setSelectedDate(todayIso)}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+              selectedDate === todayIso
+                ? 'bg-blue-500 text-white shadow-xs'
+                : 'bg-blue-900/60 text-blue-200 hover:bg-blue-800'
+            }`}
+            title="Pilih Hari Ini"
+          >
+            Hari Ini
+          </button>
           <button
             type="button"
             onClick={() => setIsSavedDataModalOpen(true)}
