@@ -22,6 +22,7 @@ import {
   getGoogleAppsScriptUrl,
   AllSheetsData
 } from './sheetsApi';
+import { normalizePlanName, getDeterministicClosingRecordId } from './storeHelper';
 
 // Default alert configuration
 const DEFAULT_CONFIG: LossAlertConfig = {
@@ -553,30 +554,193 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
   const result = await fetchAllDataFromSheets();
   if (result.success && result.data) {
     const d = result.data;
+
+    // 1. Stores (Preserve any local custom stores)
     if (d.stores && d.stores.length > 0) {
-      safeSetItem('stores_list', JSON.stringify(d.stores));
+      const localStores = getStores();
+      const storeMap = new Map<string, Store>();
+      d.stores.forEach((s) => storeMap.set(String(s.id), s));
+      localStores.forEach((ls) => {
+        if (!storeMap.has(String(ls.id))) {
+          storeMap.set(String(ls.id), ls);
+        }
+      });
+      const mergedStores = Array.from(storeMap.values());
+      safeSetItem('stores_list', JSON.stringify(mergedStores));
+      d.stores = mergedStores;
     }
+
+    // 2. Users (Preserve local users)
     if (d.users && d.users.length > 0) {
-      safeSetItem('users_list', JSON.stringify(d.users));
+      const localUsers = getUsers();
+      const userMap = new Map<string, UserAccount>();
+      d.users.forEach((u) => userMap.set(String(u.id || u.username), u));
+      localUsers.forEach((lu) => {
+        const key = String(lu.id || lu.username);
+        if (!userMap.has(key)) {
+          userMap.set(key, lu);
+        }
+      });
+      const mergedUsers = Array.from(userMap.values());
+      safeSetItem('users_list', JSON.stringify(mergedUsers));
+      d.users = mergedUsers;
     }
+
+    // 3. COGS Master
     if (d.cogsMaster && d.cogsMaster.length > 0) {
       safeSetItem('cogs_master', JSON.stringify(normalizeCogsList(d.cogsMaster)));
     }
-    if (d.thawingItems && d.thawingItems.length > 0) {
-      safeSetItem('thawing_items', JSON.stringify(d.thawingItems));
-    }
-    if (d.fabricationSegments && d.fabricationSegments.length > 0) {
-      safeSetItem('fabrication_segments', JSON.stringify(d.fabricationSegments));
-    }
-    if (d.closingPlanRecords && d.closingPlanRecords.length > 0) {
-      safeSetItem('closing_plan_records', JSON.stringify(d.closingPlanRecords));
-    }
-    if (d.dailyClosingReports && d.dailyClosingReports.length > 0) {
-      safeSetItem('daily_reports', JSON.stringify(d.dailyClosingReports));
-    }
-    if (d.stockAdjustments && d.stockAdjustments.length > 0) {
-      safeSetItem('stock_adjustments', JSON.stringify(d.stockAdjustments));
-    }
+
+    // 4. Thawing Items / Bahan Baku Masuk (Defensive Smart Merge: NEVER wipe out local items!)
+    const currentLocalItems = getThawingItems();
+    const itemMap = new Map<string, ThawingItem>();
+    // First index cloud items
+    (d.thawingItems || []).forEach((item) => {
+      if (item && item.id) {
+        itemMap.set(String(item.id), item);
+      }
+    });
+    // Then preserve and merge local items
+    currentLocalItems.forEach((loc) => {
+      if (!loc || !loc.id) return;
+      const key = String(loc.id);
+      if (!itemMap.has(key)) {
+        // Newly created local item that cloud doesn't have yet -> PRESERVE!
+        itemMap.set(key, loc);
+      } else {
+        // If both exist, keep the one with photo or latest timestamp
+        const cloudItem = itemMap.get(key)!;
+        const locHasPhoto = Boolean(loc.image && loc.image !== 'placeholder');
+        const cloudHasPhoto = Boolean(cloudItem.image && cloudItem.image !== 'placeholder');
+        if (locHasPhoto && !cloudHasPhoto) {
+          itemMap.set(key, { ...cloudItem, image: loc.image });
+        }
+      }
+    });
+    const mergedItems = Array.from(itemMap.values()).filter(
+      (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'
+    );
+    safeSetItem('thawing_items', JSON.stringify(mergedItems));
+    d.thawingItems = mergedItems;
+
+    // 5. Fabrication Segments (Smart Merge)
+    const currentLocalSegments = getFabricationSegments();
+    const segMap = new Map<string, FabricationSegment>();
+    (d.fabricationSegments || []).forEach((s) => {
+      if (s && s.id) segMap.set(String(s.id), s);
+    });
+    currentLocalSegments.forEach((loc) => {
+      if (!loc || !loc.id) return;
+      if (!segMap.has(String(loc.id))) {
+        segMap.set(String(loc.id), loc);
+      }
+    });
+    const mergedSegments = Array.from(segMap.values());
+    safeSetItem('fabrication_segments', JSON.stringify(mergedSegments));
+    d.fabricationSegments = mergedSegments;
+
+    // 6. Closing Plan Records (Closing Fisik) - Smart Bi-directional Merge
+    const currentLocalClosing = getClosingPlanRecords();
+    const closingMap = new Map<string, ClosingPlanRecord>();
+
+    // Helper for clean key
+    const makeClosingKey = (c: ClosingPlanRecord): string => {
+      const cleanStore = String(c.storeId || '1').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const cleanPlan = normalizePlanName(c.planName || 'general');
+      const cleanDate = (c.date || (c.timestamp ? c.timestamp.split('T')[0] : '')).replace(/[^0-9\-]/g, '');
+      return `${cleanStore}_${cleanPlan}_${cleanDate}`;
+    };
+
+    // Index cloud closing records
+    (d.closingPlanRecords || []).forEach((c) => {
+      if (c && (c.date || c.timestamp || '').split('T')[0] !== '2026-08-29') {
+        const key = c.id || makeClosingKey(c);
+        closingMap.set(key, c);
+      }
+    });
+
+    // Merge with local records
+    currentLocalClosing.forEach((loc) => {
+      if (!loc || (loc.date || loc.timestamp || '').split('T')[0] === '2026-08-29') return;
+      const keyById = loc.id;
+      const keyByProp = makeClosingKey(loc);
+      let foundKey: string | undefined = undefined;
+
+      if (keyById && closingMap.has(keyById)) {
+        foundKey = keyById;
+      } else if (closingMap.has(keyByProp)) {
+        foundKey = keyByProp;
+      }
+
+      if (!foundKey) {
+        // Locally saved record not yet on sheets -> PRESERVE!
+        const newKey = loc.id || keyByProp;
+        closingMap.set(newKey, loc);
+      } else {
+        const existing = closingMap.get(foundKey)!;
+        const locTime = new Date(loc.timestamp || 0).getTime();
+        const srvTime = new Date(existing.timestamp || 0).getTime();
+        const locActual = Number(loc.actualClosingStockKg || 0);
+        const srvActual = Number(existing.actualClosingStockKg || 0);
+
+        if (locTime >= srvTime || (locActual > 0 && srvActual === 0) || (loc.photoUrl && !existing.photoUrl)) {
+          closingMap.set(foundKey, { ...existing, ...loc });
+        } else {
+          closingMap.set(foundKey, {
+            ...loc,
+            ...existing,
+            photoUrl: existing.photoUrl || loc.photoUrl || '',
+            note: existing.note || loc.note || '',
+          });
+        }
+      }
+    });
+
+    const mergedClosing = Array.from(closingMap.values()).filter(
+      (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+    );
+    safeSetItem('closing_plan_records', JSON.stringify(mergedClosing));
+    d.closingPlanRecords = mergedClosing;
+
+    // 7. Daily Closing Reports (Rekap Harian)
+    const currentLocalReports = getDailyReports();
+    const reportMap = new Map<string, DailyClosingReport>();
+    (d.dailyClosingReports || []).forEach((r) => {
+      if (r && r.date && r.date.split('T')[0] !== '2026-08-29') {
+        const key = r.id || `${r.storeId || '1'}_${r.date.split('T')[0]}`;
+        reportMap.set(key, r);
+      }
+    });
+    currentLocalReports.forEach((loc) => {
+      if (!loc || !loc.date || loc.date.split('T')[0] === '2026-08-29') return;
+      const key = loc.id || `${loc.storeId || '1'}_${loc.date.split('T')[0]}`;
+      if (!reportMap.has(key)) {
+        reportMap.set(key, loc);
+      }
+    });
+    const mergedReports = Array.from(reportMap.values());
+    safeSetItem('daily_reports', JSON.stringify(mergedReports));
+    d.dailyClosingReports = mergedReports;
+
+    // 8. Stock Adjustments (Koreksi Stok)
+    const currentLocalAdjs = getStockAdjustments();
+    const adjMap = new Map<string, StockAdjustment>();
+    (d.stockAdjustments || []).forEach((a) => {
+      if (a && a.id) adjMap.set(String(a.id), a);
+    });
+    currentLocalAdjs.forEach((loc) => {
+      if (!loc || !loc.id) return;
+      if (!adjMap.has(String(loc.id))) {
+        adjMap.set(String(loc.id), loc);
+      }
+    });
+    const mergedAdjs = Array.from(adjMap.values()).filter(
+      (a) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'
+    );
+    safeSetItem('stock_adjustments', JSON.stringify(mergedAdjs));
+    d.stockAdjustments = mergedAdjs;
+
+    // 9. Loss Config
     if (d.lossConfig) {
       safeSetItem('loss_config', JSON.stringify(d.lossConfig));
     }
