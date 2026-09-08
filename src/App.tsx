@@ -1006,7 +1006,11 @@ export default function App() {
 
   // Handler: Save Daily Closing Report
   const handleSaveDailyReport = (report: DailyClosingReport) => {
-    const updated = [report, ...reports];
+    // If a report already exists for the same store and date, replace it to avoid duplicates
+    const filtered = reports.filter(
+      (r) => !(r.date === report.date && ((r.storeId && report.storeId && r.storeId === report.storeId) || (!r.storeId && !report.storeId)))
+    );
+    const updated = [report, ...filtered];
     setReports(updated);
     saveDailyReports(updated);
 
