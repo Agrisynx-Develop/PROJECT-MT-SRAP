@@ -260,6 +260,7 @@ async function initDatabaseTables() {
           butcher_name TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+        ALTER TABLE daily_closing_reports ADD COLUMN IF NOT EXISTS report_data JSONB;
 
         CREATE TABLE IF NOT EXISTS loss_config (
           id TEXT PRIMARY KEY,
@@ -1350,7 +1351,8 @@ async function startServer() {
                  status_alert as "statusAlert",
                  closing_photo_url as "closingPhotoUrl",
                  butcher_name as "butcherName",
-                 created_at as "createdAt"
+                 created_at as "createdAt",
+                 report_data as "reportData"
           FROM daily_closing_reports
         `;
         const params: any[] = [];
@@ -1360,7 +1362,18 @@ async function startServer() {
         }
         query += ` ORDER BY date DESC, created_at DESC`;
         const result = await p.query(query, params);
-        return res.json(result.rows);
+        const mapped = result.rows.map((row: any) => {
+          if (row.reportData) {
+            try {
+              const parsed = typeof row.reportData === 'string' ? JSON.parse(row.reportData) : row.reportData;
+              return { ...row, ...parsed };
+            } catch {
+              return row;
+            }
+          }
+          return row;
+        });
+        return res.json(mapped);
       } catch (err) {
         console.warn('Postgres fetch reports error:', err);
       }
@@ -1381,19 +1394,20 @@ async function startServer() {
                 id, store_id, store_name, date, total_weight_raw, total_weight_after_thawing,
                 total_weight_fabricated, total_periodic_shrinkage, total_sales, total_end_stock,
                 thawing_loss_percent, fabrication_loss_percent, sales_loss_percent,
-                overall_loss_percent, status_alert, closing_photo_url, butcher_name, created_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                overall_loss_percent, status_alert, closing_photo_url, butcher_name, created_at, report_data
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
               ON CONFLICT (id) DO UPDATE SET
-                total_sales = $9, total_end_stock = $10, overall_loss_percent = $14, status_alert = $15`,
+                total_sales = $9, total_end_stock = $10, overall_loss_percent = $14, status_alert = $15, report_data = $19`,
               [
                 r.id, r.storeId || '1', r.storeName || 'TDN CKR', r.date,
-                r.totalWeightRaw || 0, r.totalWeightAfterThawing || 0,
-                r.totalWeightFabricated || 0, r.totalPeriodicShrinkage || 0,
-                r.totalSales || 0, r.totalEndStock || 0,
-                r.thawingLossPercent || 0, r.fabricationLossPercent || 0,
+                r.totalWeightRaw || r.totalWeightBeforeThawing || 0, r.totalWeightAfterThawing || 0,
+                r.totalWeightFabricated || r.totalWeightAfterFabrication || 0, r.totalPeriodicShrinkage || r.totalProcessLoss || 0,
+                r.totalSales || r.totalSalesKg || 0, r.totalEndStock || r.currentClosingStockKg || 0,
+                r.thawingLossPercent || r.totalThawingLoss || 0, r.fabricationLossPercent || r.totalFabricationLoss || 0,
                 r.salesLossPercent || 0, r.overallLossPercent || 0,
                 r.statusAlert || 'Normal', r.closingPhotoUrl || null,
-                r.butcherName || 'Butcher', r.createdAt || new Date().toISOString()
+                r.butcherName || r.butcherInCharge || 'Butcher', r.createdAt || r.closedAt || new Date().toISOString(),
+                JSON.stringify(r)
               ]
             );
           }
