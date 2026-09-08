@@ -264,8 +264,22 @@ export function exportStoreDailyLaporanExcel(
   const dayName = getDayNameIndo(dateStr);
   const shortDate = getShortDate(dateStr);
 
-  const todayItems = items.filter((i) => !i.isCarryover);
-  const carryoverItems = items.filter((i) => i.isCarryover);
+  const filteredItems = (items || []).filter((i) => {
+    if (!i) return false;
+    const storeMatch = !i.storeId || matchStoreEntity(i.storeId, store);
+    const dateMatch = !dateStr || (i.createdAt || i.thawingStartTime || '').startsWith(dateStr);
+    return storeMatch && dateMatch;
+  });
+
+  const filteredClosing = (closingRecords || []).filter((c) => {
+    if (!c) return false;
+    const storeMatch = !c.storeId || matchStoreEntity(c.storeId, store);
+    const dateMatch = !dateStr || (c.date || c.timestamp || '').startsWith(dateStr);
+    return storeMatch && dateMatch;
+  });
+
+  const todayItems = filteredItems.filter((i) => !i.isCarryover);
+  const carryoverItems = filteredItems.filter((i) => i.isCarryover);
 
   // Partition today items strictly into the 8 columns (mutually exclusive)
   const col1Items = todayItems.filter((i) => getThawingItemColumn(i) === 1);
@@ -308,19 +322,19 @@ export function exportStoreDailyLaporanExcel(
   // Operational Weights
   const dgFreshBahan = dgFreshItems.reduce((s, i) => s + i.weightBeforeThawing, 0);
   const dgFreshHasil = dgFreshItems.reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing), 0);
-  const dgFreshSusutJual = closingRecords.filter((c) => (c.planName || '').toLowerCase().includes('rdang') || (c.category || '').toUpperCase().includes('FRESH')).reduce((s, c) => s + c.susutJualKg, 0);
+  const dgFreshSusutJual = filteredClosing.filter((c) => (c.planName || '').toLowerCase().includes('rdang') || (c.category || '').toUpperCase().includes('FRESH')).reduce((s, c) => s + c.susutJualKg, 0);
 
   const dgPremBahan = dgPremItems.reduce((s, i) => s + i.weightBeforeThawing, 0);
   const dgPremHasil = dgPremItems.reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing), 0);
-  const dgPremSusutJual = closingRecords.filter((c) => (c.planName || '').toLowerCase().includes('prem')).reduce((s, c) => s + c.susutJualKg, 0);
+  const dgPremSusutJual = filteredClosing.filter((c) => (c.planName || '').toLowerCase().includes('prem')).reduce((s, c) => s + c.susutJualKg, 0);
 
   const rawonBahan = rawonItems.reduce((s, i) => s + i.weightBeforeThawing, 0);
   const rawonHasil = rawonItems.reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing), 0);
-  const rawonSusutJual = closingRecords.filter((c) => (c.planName || '').toLowerCase().includes('rawon')).reduce((s, c) => s + c.susutJualKg, 0);
+  const rawonSusutJual = filteredClosing.filter((c) => (c.planName || '').toLowerCase().includes('rawon')).reduce((s, c) => s + c.susutJualKg, 0);
 
   const shankBahan = shankleItems.reduce((s, i) => s + i.weightBeforeThawing, 0);
   const shankHasil = shankleItems.reduce((s, i) => s + (i.weightAfterThawing || i.weightBeforeThawing), 0);
-  const shankSusutJual = closingRecords.filter((c) => (c.planName || '').toLowerCase().includes('shank') || (c.planName || '').toLowerCase().includes('ekonomis')).reduce((s, c) => s + c.susutJualKg, 0);
+  const shankSusutJual = filteredClosing.filter((c) => (c.planName || '').toLowerCase().includes('shank') || (c.planName || '').toLowerCase().includes('ekonomis')).reduce((s, c) => s + c.susutJualKg, 0);
 
   // =========================================================================
   // SHEET 1: LAP.DAGING (Bagian 1: Matriks Proses Produksi Tally/Susut & Bagian 2: Laporan Modal/COGS)
@@ -1092,7 +1106,7 @@ export function exportStoreDailyLaporanExcel(
     const r = 2 + idx;
     const rIdx = r + 1;
 
-    const rec = closingRecords.find((c) => (c.planName || '').toLowerCase().includes(def.planName.toLowerCase()));
+    const rec = filteredClosing.find((c) => (c.planName || '').toLowerCase().includes(def.planName.toLowerCase()));
     const carry = carryoverItems.filter((c) => (c.plannedFabrication || '').toLowerCase().includes(def.planName.toLowerCase()));
     const planAdj = adjustments.filter((a) => (a.planName || a.meatName || '').toLowerCase().includes(def.planName.toLowerCase()));
 
