@@ -1937,6 +1937,7 @@ export default function App() {
               onDeleteClosingRecord={handleDeleteClosingRecord}
               onSaveClosingRecord={handleSaveClosingRecord}
               onAddItem={handleAddItem}
+              onDeleteItem={handleDeleteItem}
               onSaveDailyReport={handleSaveDailyReport}
               onPurgeDate={handlePurgeDate}
               safeThawingLossPercent={lossConfig.safeThawingLossPercent}
