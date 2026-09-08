@@ -1023,12 +1023,14 @@ export default function App() {
   };
 
   // Handler: Save Closing Plan Record (Physical Closing)
-  const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string }) => {
-    const recId = record.id || getDeterministicClosingRecordId(record.storeId, record.planName, record.date);
+  const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string; timestamp?: string }) => {
+    const cleanDate = (record.date || '').split('T')[0] || new Date().toISOString().split('T')[0];
+    const recId = record.id || getDeterministicClosingRecordId(record.storeId, record.planName, cleanDate);
     const newRec: ClosingPlanRecord = {
       ...record,
       id: recId,
-      timestamp: new Date().toISOString(),
+      date: cleanDate,
+      timestamp: record.timestamp || (cleanDate ? `${cleanDate}T17:00:00.000Z` : new Date().toISOString()),
     };
     
     setClosingRecords((prev) => {
@@ -1037,7 +1039,7 @@ export default function App() {
           r.id === newRec.id ||
           (matchStoreEntity(r.storeId, { id: newRec.storeId }) &&
             isMatchPlan(r.planName, newRec.planName) &&
-            (r.date === newRec.date || !r.date || !newRec.date))
+            ((r.date || '').split('T')[0] === cleanDate))
       );
       let updated: ClosingPlanRecord[];
       if (existingIdx >= 0) {
@@ -1994,6 +1996,7 @@ export default function App() {
               closingRecords={storeClosingRecords}
               adjustments={storeAdjustments}
               cogsList={cogsList}
+              reports={storeReports}
               onUpdateCogs={handleUpdateCogs}
               onAddAdjustment={handleAddAdjustment}
               onDeleteAdjustment={handleDeleteAdjustment}
