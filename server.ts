@@ -49,12 +49,16 @@ function normalizeRole(dbRole: string): 'admin' | 'butcher' | 'md' {
 // Fallback in-memory store matching actual database structure
 const inMemoryStore = {
   stores: [
-    { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' }
+    { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' },
+    { id: '2', code: 'BKS', name: 'TDN BKS', city: 'Bekasi', createdAt: '2026-01-15' },
+    { id: '3', code: 'BDG', name: 'TDN BDG', city: 'Bandung', createdAt: '2026-02-01' },
   ],
   users: [
     { id: '1', username: 'butcher_ckr', password: 'butcher123', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher CKR', createdAt: '2026-01-01' },
     { id: '2', username: 'admin_ckr', password: 'admin123', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin CKR', createdAt: '2026-01-01' },
     { id: '3', username: 'md_pusat', password: 'md123', role: 'md', storeId: null, storeName: null, fullName: 'MD Pusat', createdAt: '2026-01-01' },
+    { id: '4', username: 'butcher_bks', password: 'butcher123', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher BKS', createdAt: '2026-01-15' },
+    { id: '5', username: 'admin_bks', password: 'admin123', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin BKS', createdAt: '2026-01-15' },
   ],
   cogsMaster: [
     { id: 'cogs_1', itemCode: 'DF-01', itemName: 'HQ 41/42/44/45 (Daging Fresh)', planName: 'HQ 41/42/44/45', cogsPerKg: 102000, defaultPricePerKg: 125000, sellingPricePerKg: 125000, category: 'DAGING FRESH', updatedAt: '2026-08-01', updatedBy: 'MD Pusat' },
@@ -70,6 +74,7 @@ const inMemoryStore = {
   fabricationSegments: [] as any[],
   stockAdjustments: [] as any[],
   closingPlanRecords: [] as any[],
+  dataSusut: [] as any[],
   dailyClosingReports: [] as any[],
   trainingFiles: [] as any[],
   dailyTargets: [] as any[],
@@ -271,6 +276,17 @@ async function initDatabaseTables() {
           safe_fabrication_loss_percent REAL NOT NULL,
           sales_prediction_kg REAL NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS data_susut (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          store_name TEXT NOT NULL,
+          store_id TEXT NOT NULL,
+          plan_name TEXT NOT NULL,
+          susut_proses REAL NOT NULL,
+          susut_jual REAL NOT NULL,
+          created_at TEXT NOT NULL
+        );
       `);
 
       // Seed CKR store if empty
@@ -468,79 +484,54 @@ async function startServer() {
       }
     });
 
-    if (table === 'Thawing_Daging') {
+    if (table === 'Data_Thawing' || table === 'Thawing_Daging' || table === 'thawing_items') {
       const startT = clean.thawingStartTime || clean.createdAt || new Date().toISOString();
       const endT = clean.thawingEndTime || (clean.status === 'pabrikasi_ready' || clean.status === 'pabrikasi_done' ? new Date().toISOString() : '');
-      const durMinutes = clean.durationMinutes || (startT && endT ? Math.round((new Date(endT).getTime() - new Date(startT).getTime()) / 60000) : '');
+      const durMinutes = clean.durationMinutes || (startT && endT ? Math.round((new Date(endT).getTime() - new Date(startT).getTime()) / 60000) : 45);
+      const wBefore = Number(clean.weightBeforeThawing) || 0;
+      const wAfter = clean.weightAfterThawing !== undefined && clean.weightAfterThawing !== null && clean.weightAfterThawing !== '' ? Number(clean.weightAfterThawing) : wBefore;
+      const susut = clean.shrinkageThawing !== undefined && clean.shrinkageThawing !== null ? Number(clean.shrinkageThawing) : Math.max(0, wBefore - wAfter);
 
       return {
-        id: clean.id || `meat_${Date.now()}`,
-        storeId: clean.storeId || 'store_ckr',
-        name: clean.name || '',
-        pabrikasiCategory: clean.pabrikasiCategory || 'DAGING FRESH',
-        plannedFabrication: clean.plannedFabrication || clean.name || '',
-        openingPurpose: clean.openingPurpose || 'UNTUK DISPLAY',
-        status: clean.status || 'thawing',
-        weightBeforeThawing: Number(clean.weightBeforeThawing) || 0,
-        weightAfterThawing: clean.weightAfterThawing !== undefined && clean.weightAfterThawing !== null && clean.weightAfterThawing !== '' ? Number(clean.weightAfterThawing) : '',
-        shrinkageThawing: clean.shrinkageThawing !== undefined && clean.shrinkageThawing !== null && clean.shrinkageThawing !== '' ? Number(clean.shrinkageThawing) : '',
-        shrinkageThawingPercent: clean.shrinkageThawingPercent !== undefined && clean.shrinkageThawingPercent !== null && clean.shrinkageThawingPercent !== '' ? Number(clean.shrinkageThawingPercent) : '',
-        susutJualKg: Number(clean.susutJualKg) || 0,
-        salesKg: Number(clean.salesKg) || 0,
-        thawingStartTime: formatDateTime(startT),
-        thawingEndTime: endT ? formatDateTime(endT) : '',
-        durationMinutes: durMinutes || '',
-        butcherName: clean.butcherName || 'Butcher TDN Cikarang',
-        isCarryover: clean.isCarryover ? 'YA' : 'TIDAK',
-        image: clean.image || 'Foto Kamera Terlampir',
-        createdAt: formatDateTime(clean.createdAt || startT),
+        'nama bahan': clean.name || clean['nama bahan'] || '',
+        'tanggal': (clean.createdAt || clean.thawingStartTime || new Date().toISOString()).split('T')[0],
+        'berat sebelum thawing': wBefore,
+        'berat setelah thawing': wAfter,
+        'foto': clean.image || clean.photoUrl || clean['foto'] || 'Foto Kamera Terlampir',
+        'susut proses': parseFloat(susut.toFixed(3)),
+        'durasi thawing': `${durMinutes} menit`,
+        'status': clean.status || 'thawing',
       };
     }
 
-    if (table === 'Pabrikasi_Segmen') {
+    if (table === 'Data_Pabrikasi' || table === 'Pabrikasi_Segmen' || table === 'fabrication_segments') {
       return {
-        id: clean.id || `seg_${Date.now()}`,
-        storeId: clean.storeId || 'store_ckr',
-        itemId: clean.itemId || '',
-        itemName: clean.itemName || '',
-        segmentName: clean.segmentName || '',
-        targetWeight: Number(clean.targetWeight) || 0,
-        actualWeight: Number(clean.actualWeight) || 0,
-        periodicShrinkage: Number(clean.periodicShrinkage) || 0,
-        salesKg: Number(clean.salesKg) || 0,
-        plannedFabrication: clean.plannedFabrication || '',
-        openingPurpose: clean.openingPurpose || 'UNTUK DISPLAY',
-        isTransferred: clean.isTransferred ? 'YA' : 'TIDAK',
-        originalPurpose: clean.originalPurpose || '',
-        transferTimestamp: clean.transferTimestamp ? formatDateTime(clean.transferTimestamp) : '',
-        createdAt: formatDateTime(clean.createdAt || new Date().toISOString()),
+        'nama bahan': clean.itemName || clean.name || clean['nama bahan'] || '',
+        'tanggal': (clean.createdAt || clean.transferTimestamp || new Date().toISOString()).split('T')[0],
+        'kategori': clean.category || clean.pabrikasiCategory || clean['kategori'] || 'DAGING FRESH',
+        'rencana pabrikasi': clean.plannedFabrication || clean.planName || clean['rencana pabrikasi'] || '',
+        'daftar segmen hasil potongan': clean.segmentName || clean['daftar segmen hasil potongan'] || '',
+        'Tujuan': clean.openingPurpose || clean['Tujuan'] || 'UNTUK DISPLAY',
+        'berat rencana pabrikasi': Number(clean.actualWeight || clean.targetWeight) || 0,
       };
     }
 
-    if (table === 'Closing_Fisik') {
+    if (table === 'Closing_Rencana_Potong' || table === 'Closing_Fisik' || table === 'closing_plan_records') {
       return {
-        id: clean.id || `close_${Date.now()}`,
-        storeId: clean.storeId || 'store_ckr',
-        date: clean.date || new Date().toISOString().split('T')[0],
-        planName: clean.planName || '',
-        category: clean.category || 'DAGING FRESH',
-        openingStockKg: Number(clean.openingStockKg) || 0,
-        newProcessedKg: Number(clean.newProcessedKg) || 0,
-        salesKg: Number(clean.salesKg) || 0,
-        adjustInKg: Number(clean.adjustInKg) || 0,
-        adjustOutKg: Number(clean.adjustOutKg) || 0,
-        closingStockBySystemKg: Number(clean.closingStockBySystemKg) || 0,
-        actualClosingStockKg: Number(clean.actualClosingStockKg) || 0,
-        susutJualKg: Number(clean.susutJualKg) || 0,
-        photoUrl: clean.photoUrl ? 'Foto Timbangan Terlampir' : '',
-        photoCaption: clean.photoCaption || '',
-        note: clean.note || '',
-        butcherName: clean.butcherName || 'Butcher TDN',
-        timestamp: formatDateTime(clean.timestamp || new Date().toISOString()),
+        'tanggal': clean.date || (clean.timestamp ? clean.timestamp.split('T')[0] : new Date().toISOString().split('T')[0]),
+        'nama bahan': clean.planName || clean.name || clean['nama bahan'] || '',
+        'sisa kemarin': Number(clean.openingStockKg !== undefined ? clean.openingStockKg : clean['sisa kemarin']) || 0,
+        'diolah baru': Number(clean.newProcessedKg !== undefined ? clean.newProcessedKg : clean['diolah baru']) || 0,
+        'sales real': Number(clean.salesKg !== undefined ? clean.salesKg : clean['sales real']) || 0,
+        'timbangan sisa stok akhir': Number(clean.actualClosingStockKg !== undefined ? clean.actualClosingStockKg : clean['timbangan sisa stok akhir']) || 0,
+        'foto timbangan': clean.photoUrl || clean['foto timbangan'] || 'Foto Timbangan Terlampir',
+        'susut jual': Number(clean.susutJualKg !== undefined ? clean.susutJualKg : clean['susut jual']) || 0,
+        'status': clean.status || 'SELESAI',
+        'catatan': clean.note || clean['catatan'] || '-',
       };
     }
 
-    if (table === 'Laporan_Closing') {
+    if (table === 'Laporan_Closing' || table === 'daily_closing_reports') {
       return {
         id: clean.id || `rep_${Date.now()}`,
         storeId: clean.storeId || 'store_ckr',
@@ -563,49 +554,62 @@ async function startServer() {
       };
     }
 
-    if (table === 'Koreksi_Stok') {
+    if (table === 'Adjustment' || table === 'Koreksi_Stok' || table === 'stock_adjustments') {
       return {
-        id: clean.id || `adj_${Date.now()}`,
-        storeId: clean.storeId || 'store_ckr',
-        planName: clean.planName || '',
-        type: clean.type || 'IN',
-        weightKg: Number(clean.weightKg) || 0,
-        reason: clean.reason || '',
-        adminName: clean.adminName || 'Admin Toko',
-        createdAt: formatDateTime(clean.createdAt || new Date().toISOString()),
+        'tanggal': clean.date || (clean.createdAt ? clean.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
+        'nama toko': clean.storeName || clean['nama toko'] || 'TDN CKR',
+        'id toko': String(clean.storeId || clean['id toko'] || '1'),
+        'jenis': clean.type || clean['jenis'] || 'IN',
+        'rencana potong': clean.planName || clean['rencana potong'] || '',
+        'berat': Number(clean.weightKg !== undefined ? clean.weightKg : clean['berat']) || 0,
+        'alasan': clean.reason || clean['alasan'] || '',
+      };
+    }
+
+    if (table === 'Data_Susut' || table === 'data_susut') {
+      return {
+        'tanggal': clean.date || (clean.createdAt ? clean.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
+        'nama toko': clean.storeName || clean['nama toko'] || 'TDN CKR',
+        'id toko': String(clean.storeId || clean['id toko'] || '1'),
+        'rencana potong': clean.planName || clean['rencana potong'] || '',
+        'susut proses': Number(clean.susutProses !== undefined ? clean.susutProses : clean['susut proses']) || 0,
+        'susut jual': Number(clean.susutJual !== undefined ? clean.susutJual : clean['susut jual']) || 0,
       };
     }
 
     if (table === 'Pengguna' || table === 'users') {
       return {
-        id: clean.id || '',
-        username: clean.username || '',
-        role: clean.role || '',
-        fullName: clean.fullName || clean.full_name || '',
-        storeId: clean.storeId || clean.store_id || '',
-        storeName: clean.storeName || clean.store_name || '',
-        createdAt: formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
+        'id': String(clean.id || ''),
+        'user name': clean.username || clean.userName || clean['user name'] || '',
+        'role': clean.role || '',
+        'full name': clean.fullName || clean.full_name || clean['full name'] || '',
+        'store id': String(clean.storeId || clean.store_id || clean['store id'] || ''),
+        'store name': clean.storeName || clean.store_name || clean['store name'] || '',
+        'created at': formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
       };
     }
 
     if (table === 'Toko_Cabang' || table === 'stores') {
       return {
-        id: clean.id || '',
-        code: clean.code || clean.kode || '',
-        name: clean.name || clean.nama || '',
-        city: clean.city || clean.kota || '',
-        createdAt: formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
+        'id': String(clean.id || ''),
+        'code': clean.code || clean.kode || clean['code'] || '',
+        'name': clean.name || clean.nama || clean['name'] || '',
+        'city': clean.city || clean.kota || clean['city'] || '',
+        'created at': formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
       };
     }
 
     if (table === 'Master_COGS' || table === 'cogs_master') {
       return {
-        id: clean.id || '',
-        planName: clean.planName || clean.itemName || '',
-        cogsPerKg: Number(clean.cogsPerKg) || 0,
-        sellingPricePerKg: Number(clean.sellingPricePerKg || clean.defaultPricePerKg) || 0,
-        category: clean.category || '',
-        updatedAt: formatDateTime(clean.updatedAt || new Date().toISOString()),
+        'id': String(clean.id || ''),
+        'item code': clean.itemCode || clean.item_code || clean['item code'] || '',
+        'item name': clean.itemName || clean.item_name || clean['item name'] || '',
+        'plan name': clean.planName || clean.plan_name || clean['plan name'] || '',
+        'cogs per kg': Number(clean.cogsPerKg || clean.cogs_per_kg) || 0,
+        'selling price': Number(clean.sellingPricePerKg || clean.selling_price_per_kg || clean.defaultPricePerKg) || 0,
+        'kategori': clean.category || clean['kategori'] || '',
+        'updated at': formatDateTime(clean.updatedAt || clean.updated_at || new Date().toISOString()),
+        'updated by': clean.updatedBy || clean.updated_by || clean['updated by'] || 'MD Pusat',
       };
     }
 
@@ -613,14 +617,20 @@ async function startServer() {
   };
 
   const TABLE_SCHEMA_HEADERS: Record<string, string[]> = {
-    'Toko_Cabang': ['id', 'code', 'name', 'city', 'createdAt'],
-    'Pengguna': ['id', 'username', 'role', 'fullName', 'storeId', 'storeName', 'createdAt'],
-    'Master_COGS': ['id', 'planName', 'cogsPerKg', 'sellingPricePerKg', 'category', 'updatedAt'],
-    'Thawing_Daging': ['id', 'storeId', 'name', 'pabrikasiCategory', 'plannedFabrication', 'openingPurpose', 'status', 'weightBeforeThawing', 'weightAfterThawing', 'shrinkageThawing', 'shrinkageThawingPercent', 'susutJualKg', 'salesKg', 'thawingStartTime', 'thawingEndTime', 'durationMinutes', 'butcherName', 'isCarryover', 'image', 'createdAt'],
-    'Pabrikasi_Segmen': ['id', 'storeId', 'itemId', 'itemName', 'segmentName', 'targetWeight', 'actualWeight', 'periodicShrinkage', 'salesKg', 'plannedFabrication', 'openingPurpose', 'isTransferred', 'originalPurpose', 'transferTimestamp', 'createdAt'],
-    'Closing_Fisik': ['id', 'storeId', 'planName', 'date', 'displayClosingKg', 'pesananClosingKg', 'totalPhysicalClosingKg', 'photoDisplayUrl', 'photoPesananUrl', 'timestamp'],
+    'Data_Thawing': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
+    'Data_Pabrikasi': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
+    'Closing_Rencana_Potong': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
+    'Pengguna': ['id', 'user name', 'role', 'full name', 'store id', 'store name', 'created at'],
+    'Toko_Cabang': ['id', 'code', 'name', 'city', 'created at'],
+    'Master_COGS': ['id', 'item code', 'item name', 'plan name', 'cogs per kg', 'selling price', 'kategori', 'updated at', 'updated by'],
+    'Adjustment': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
+    'Data_Susut': ['tanggal', 'nama toko', 'id toko', 'rencana potong', 'susut proses', 'susut jual'],
+    // Backward compatibility aliases
+    'Thawing_Daging': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
+    'Pabrikasi_Segmen': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
+    'Closing_Fisik': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
+    'Koreksi_Stok': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
     'Laporan_Closing': ['id', 'storeId', 'storeName', 'date', 'totalWeightRaw', 'totalWeightAfterThawing', 'totalWeightFabricated', 'totalPeriodicShrinkage', 'totalSales', 'totalEndStock', 'thawingLossPercent', 'fabricationLossPercent', 'salesLossPercent', 'overallLossPercent', 'statusAlert', 'closingPhotoUrl', 'butcherName', 'createdAt'],
-    'Koreksi_Stok': ['id', 'storeId', 'planName', 'type', 'weightKg', 'reason', 'adminName', 'createdAt'],
   };
 
   const syncToSheetsBackend = async (table: string, items: any[]) => {
@@ -656,14 +666,14 @@ async function startServer() {
 
     console.log('[Google Sheets Backend] Initiating complete 8-table mirroring to Google Sheets...');
     const allTables: Array<{ name: string; items: any[] }> = [
-      { name: 'Toko_Cabang', items: inMemoryStore.stores },
+      { name: 'Data_Thawing', items: inMemoryStore.thawingItems },
+      { name: 'Data_Pabrikasi', items: inMemoryStore.fabricationSegments },
+      { name: 'Closing_Rencana_Potong', items: inMemoryStore.closingPlanRecords },
       { name: 'Pengguna', items: inMemoryStore.users },
+      { name: 'Toko_Cabang', items: inMemoryStore.stores },
       { name: 'Master_COGS', items: inMemoryStore.cogsMaster },
-      { name: 'Thawing_Daging', items: inMemoryStore.thawingItems },
-      { name: 'Pabrikasi_Segmen', items: inMemoryStore.fabricationSegments },
-      { name: 'Closing_Fisik', items: inMemoryStore.closingPlanRecords },
-      { name: 'Laporan_Closing', items: inMemoryStore.dailyClosingReports },
-      { name: 'Koreksi_Stok', items: inMemoryStore.stockAdjustments },
+      { name: 'Adjustment', items: inMemoryStore.stockAdjustments },
+      { name: 'Data_Susut', items: inMemoryStore.dataSusut },
     ];
 
     for (const t of allTables) {
@@ -971,7 +981,7 @@ async function startServer() {
           inMemoryStore.thawingItems.unshift(item);
         }
       }
-      syncToSheetsBackend('Thawing_Daging', inMemoryStore.thawingItems);
+      syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
       res.json({ success: true, items: inMemoryStore.thawingItems });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -985,6 +995,7 @@ async function startServer() {
         await p.query('DELETE FROM thawing_items WHERE id = $1', [req.params.id]);
       }
       inMemoryStore.thawingItems = inMemoryStore.thawingItems.filter((i) => i.id !== req.params.id);
+      syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1063,7 +1074,7 @@ async function startServer() {
           inMemoryStore.fabricationSegments.unshift(seg);
         }
       }
-      syncToSheetsBackend('Pabrikasi_Segmen', inMemoryStore.fabricationSegments);
+      syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1081,7 +1092,7 @@ async function startServer() {
         }
       }
       inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter((s) => s.id !== req.params.id);
-      syncToSheetsBackend('Pabrikasi_Segmen', inMemoryStore.fabricationSegments);
+      syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1145,7 +1156,7 @@ async function startServer() {
           inMemoryStore.stockAdjustments.unshift(a);
         }
       }
-      syncToSheetsBackend('Koreksi_Stok', inMemoryStore.stockAdjustments);
+      syncToSheetsBackend('Adjustment', inMemoryStore.stockAdjustments);
       res.json({ success: true, adjustments: inMemoryStore.stockAdjustments });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1268,7 +1279,7 @@ async function startServer() {
           inMemoryStore.closingPlanRecords.unshift(r);
         }
       });
-      syncToSheetsBackend('Closing_Fisik', inMemoryStore.closingPlanRecords);
+      syncToSheetsBackend('Closing_Rencana_Potong', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1286,8 +1297,100 @@ async function startServer() {
         }
       }
       inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter((r) => r.id !== req.params.id);
-      syncToSheetsBackend('Closing_Fisik', inMemoryStore.closingPlanRecords);
+      syncToSheetsBackend('Closing_Rencana_Potong', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------- DATA SUSUT (SHEET 8) -----------------
+  app.get('/api/data-susut', async (req, res) => {
+    const storeId = req.query.storeId as string | undefined;
+    const date = req.query.date as string | undefined;
+    const p = getPool();
+    if (p) {
+      try {
+        let query = `
+          SELECT id, date, store_name as "storeName", store_id as "storeId",
+                 plan_name as "planName", susut_proses as "susutProses",
+                 susut_jual as "susutJual", created_at as "createdAt"
+          FROM data_susut
+        `;
+        const params: any[] = [];
+        const conds: string[] = [];
+        if (storeId) {
+          conds.push(`store_id = $${params.length + 1}`);
+          params.push(storeId);
+        }
+        if (date) {
+          conds.push(`date = $${params.length + 1}`);
+          params.push(date);
+        }
+        if (conds.length > 0) {
+          query += ` WHERE ` + conds.join(' AND ');
+        }
+        query += ` ORDER BY date DESC, created_at DESC`;
+        const result = await p.query(query, params);
+        if (result.rows.length > 0) {
+          return res.json(result.rows);
+        }
+      } catch (err) {
+        console.warn('Postgres fetch data susut error:', err);
+      }
+    }
+    let filtered = inMemoryStore.dataSusut;
+    if (storeId) {
+      filtered = filtered.filter((s) => !s.storeId || s.storeId === storeId);
+    }
+    if (date) {
+      filtered = filtered.filter((s) => !s.date || s.date === date);
+    }
+    res.json(filtered);
+  });
+
+  app.post('/api/data-susut', async (req, res) => {
+    try {
+      const records = Array.isArray(req.body) ? req.body : [req.body];
+      const p = getPool();
+      if (p) {
+        try {
+          for (const s of records) {
+            await p.query(
+              `INSERT INTO data_susut (id, date, store_name, store_id, plan_name, susut_proses, susut_jual, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (id) DO UPDATE SET
+                 date = $2, store_name = $3, store_id = $4, plan_name = $5,
+                 susut_proses = $6, susut_jual = $7`,
+              [
+                s.id || `susut_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                s.date || new Date().toISOString().split('T')[0],
+                s.storeName || 'TDN CKR',
+                s.storeId || '1',
+                s.planName || '',
+                Number(s.susutProses) || 0,
+                Number(s.susutJual) || 0,
+                s.createdAt || new Date().toISOString()
+              ]
+            );
+          }
+        } catch (dbErr) {
+          console.error('Postgres save data susut error:', dbErr);
+        }
+      }
+
+      records.forEach((s: any) => {
+        if (!s) return;
+        const idx = inMemoryStore.dataSusut.findIndex((item: any) => item.id === s.id);
+        if (idx >= 0) {
+          inMemoryStore.dataSusut[idx] = { ...inMemoryStore.dataSusut[idx], ...s };
+        } else {
+          inMemoryStore.dataSusut.unshift(s);
+        }
+      });
+
+      syncToSheetsBackend('Data_Susut', inMemoryStore.dataSusut);
+      res.json({ success: true, dataSusut: inMemoryStore.dataSusut });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1303,13 +1406,16 @@ async function startServer() {
         (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== targetDate
       );
       inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter(
-        (s) => (s.createdAt || '').split('T')[0] !== targetDate
+        (s) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== targetDate
       );
       inMemoryStore.stockAdjustments = inMemoryStore.stockAdjustments.filter(
         (a) => (a.createdAt || a.date || '').split('T')[0] !== targetDate
       );
       inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter(
         (r) => (r.date || '').split('T')[0] !== targetDate
+      );
+      inMemoryStore.dataSusut = inMemoryStore.dataSusut.filter(
+        (s) => (s.date || s.createdAt || '').split('T')[0] !== targetDate
       );
 
       const p = getPool();
@@ -1320,11 +1426,35 @@ async function startServer() {
           await p.query('DELETE FROM fabrication_segments WHERE created_at LIKE $1', [`${targetDate}%`]);
           await p.query('DELETE FROM stock_adjustments WHERE created_at LIKE $1', [`${targetDate}%`]);
           await p.query('DELETE FROM daily_closing_reports WHERE date = $1', [targetDate]);
+          await p.query('DELETE FROM data_susut WHERE date = $1', [targetDate]);
         } catch (dbErr) {
           console.error('Postgres purge date error:', dbErr);
         }
       }
       res.json({ success: true, purgedDate: targetDate });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/purge-all-data', async (req, res) => {
+    try {
+      inMemoryStore.closingPlanRecords = [];
+      inMemoryStore.thawingItems = [];
+      inMemoryStore.fabricationSegments = [];
+      inMemoryStore.stockAdjustments = [];
+      inMemoryStore.dailyClosingReports = [];
+      inMemoryStore.dataSusut = [];
+
+      const p = getPool();
+      if (p) {
+        try {
+          await p.query('TRUNCATE TABLE closing_plan_records, thawing_items, fabrication_segments, stock_adjustments, daily_closing_reports, data_susut');
+        } catch (dbErr) {
+          console.error('Postgres purge all error:', dbErr);
+        }
+      }
+      res.json({ success: true, message: 'Semua data transaksi terinput dan dummy berhasil dibersihkan.' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
