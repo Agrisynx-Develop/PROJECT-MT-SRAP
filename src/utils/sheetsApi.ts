@@ -7,7 +7,8 @@ import {
   ThawingItem,
   FabricationSegment,
   DailyClosingReport,
-  LossAlertConfig
+  LossAlertConfig,
+  DataSusutRecord
 } from '../types';
 import { ensureCloudSafeImage } from './imageCompressor';
 
@@ -20,6 +21,7 @@ export interface AllSheetsData {
   closingPlanRecords: ClosingPlanRecord[];
   dailyClosingReports: DailyClosingReport[];
   stockAdjustments: StockAdjustment[];
+  dataSusut?: DataSusutRecord[];
   lossConfig: LossAlertConfig;
 }
 
@@ -59,6 +61,17 @@ export function normalizeSheetTableName(table: string): string {
     loss_config: 'Loss_Config',
     lossConfig: 'Loss_Config',
     Loss_Config: 'Loss_Config',
+    data_susut: 'Data_Susut',
+    dataSusut: 'Data_Susut',
+    Data_Susut: 'Data_Susut',
+    Adjustment: 'Adjustment',
+    adjustment: 'Adjustment',
+    Data_Thawing: 'Data_Thawing',
+    data_thawing: 'Data_Thawing',
+    Data_Pabrikasi: 'Data_Pabrikasi',
+    data_pabrikasi: 'Data_Pabrikasi',
+    Closing_Rencana_Potong: 'Closing_Rencana_Potong',
+    closing_rencana_potong: 'Closing_Rencana_Potong',
   };
   return map[table] || table;
 }
@@ -203,6 +216,7 @@ export async function fetchAllDataFromSheets(): Promise<{
           closingPlanRecords: Array.isArray(json.data.closingPlanRecords) ? json.data.closingPlanRecords : [],
           dailyClosingReports: Array.isArray(json.data.dailyClosingReports) ? json.data.dailyClosingReports : [],
           stockAdjustments: Array.isArray(json.data.stockAdjustments) ? json.data.stockAdjustments : [],
+          dataSusut: Array.isArray(json.data.dataSusut) ? json.data.dataSusut : [],
           lossConfig: json.data.lossConfig || {
             maxProcessLossPercent: 1.0,
             maxSalesLossPercent: 1.0,
