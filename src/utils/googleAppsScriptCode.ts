@@ -24,30 +24,37 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  *           Concurrent Lock Protection, Automatic Schema Creation & Migration.
  */
 
-// Schema & Column Headers Definitions for all 8 Tables
+// Schema & Column Headers Definitions for all 8 Tables as requested
 var TABLE_SCHEMAS = {
-  'Toko_Cabang': ['id', 'code', 'name', 'city', 'createdAt'],
-  'Pengguna': ['id', 'username', 'role', 'fullName', 'storeId', 'storeName', 'createdAt'],
-  'Master_COGS': ['id', 'itemCode', 'itemName', 'planName', 'cogsPerKg', 'defaultPricePerKg', 'sellingPricePerKg', 'category', 'updatedAt', 'updatedBy'],
-  'Thawing_Daging': ['id', 'storeId', 'name', 'pabrikasiCategory', 'plannedFabrication', 'openingPurpose', 'status', 'weightBeforeThawing', 'weightAfterThawing', 'shrinkageThawing', 'shrinkageThawingPercent', 'susutJualKg', 'salesKg', 'thawingStartTime', 'thawingEndTime', 'durationMinutes', 'butcherName', 'isCarryover', 'image', 'createdAt'],
-  'Pabrikasi_Segmen': ['id', 'storeId', 'itemId', 'itemName', 'segmentName', 'targetWeight', 'actualWeight', 'periodicShrinkage', 'salesKg', 'plannedFabrication', 'openingPurpose', 'isTransferred', 'originalPurpose', 'transferTimestamp', 'createdAt'],
-  'Closing_Fisik': ['id', 'storeId', 'date', 'planName', 'category', 'openingStockKg', 'newProcessedKg', 'salesKg', 'adjustInKg', 'adjustOutKg', 'closingStockBySystemKg', 'actualClosingStockKg', 'susutJualKg', 'photoUrl', 'photoCaption', 'note', 'butcherName', 'timestamp'],
+  'Data_Thawing': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
+  'Data_Pabrikasi': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
+  'Closing_Rencana_Potong': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
+  'Pengguna': ['id', 'user name', 'role', 'full name', 'store id', 'store name', 'created at'],
+  'Toko_Cabang': ['id', 'code', 'name', 'city', 'created at'],
+  'Master_COGS': ['id', 'item code', 'item name', 'plan name', 'cogs per kg', 'selling price', 'kategori', 'updated at', 'updated by'],
+  'Adjustment': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
+  'Data_Susut': ['tanggal', 'nama toko', 'id toko', 'rencana potong', 'susut proses', 'susut jual'],
+  // Legacy aliases for backward compatibility
+  'Thawing_Daging': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
+  'Pabrikasi_Segmen': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
+  'Closing_Fisik': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
   'Laporan_Closing': ['id', 'storeId', 'storeName', 'date', 'totalWeightBeforeThawing', 'totalWeightAfterThawing', 'totalWeightAfterFabrication', 'totalThawingLoss', 'totalFabricationLoss', 'totalProcessLoss', 'totalSusutJual', 'totalSalesKg', 'carryoverOpeningStockKg', 'currentClosingStockKg', 'financialLossRupiah', 'butcherInCharge', 'adminInCharge', 'isClosed', 'totalWeightRaw', 'totalPeriodicShrinkage', 'totalSales', 'totalEndStock', 'thawingLossPercent', 'fabricationLossPercent', 'salesLossPercent', 'overallLossPercent', 'statusAlert', 'closingPhotoUrl', 'butcherName', 'createdAt'],
-  'Koreksi_Stok': ['id', 'storeId', 'planName', 'type', 'weightKg', 'reason', 'adminName', 'createdAt'],
+  'Koreksi_Stok': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
   'Loss_Config': ['id', 'maxProcessLossPercent', 'maxSalesLossPercent', 'maxDailyLossPercent', 'safeThawingLossPercent', 'safeFabricationLossPercent', 'salesPredictionKg']
 };
 
 function resolveGASSheetName(table) {
   var map = {
-    'thawing_items': 'Thawing_Daging', 'thawingItems': 'Thawing_Daging',
-    'fabrication_segments': 'Pabrikasi_Segmen', 'fabricationSegments': 'Pabrikasi_Segmen',
-    'closing_plan_records': 'Closing_Fisik', 'closingPlanRecords': 'Closing_Fisik',
-    'daily_closing_reports': 'Laporan_Closing', 'dailyClosingReports': 'Laporan_Closing', 'daily_reports': 'Laporan_Closing',
-    'stock_adjustments': 'Koreksi_Stok', 'stockAdjustments': 'Koreksi_Stok',
-    'stores': 'Toko_Cabang', 'stores_list': 'Toko_Cabang',
-    'users': 'Pengguna', 'users_list': 'Pengguna',
-    'cogs_master': 'Master_COGS', 'cogsMaster': 'Master_COGS',
-    'loss_config': 'Loss_Config', 'lossConfig': 'Loss_Config'
+    'thawing_items': 'Data_Thawing', 'thawingItems': 'Data_Thawing', 'Thawing_Daging': 'Data_Thawing', 'data_thawing': 'Data_Thawing', 'Data_Thawing': 'Data_Thawing',
+    'fabrication_segments': 'Data_Pabrikasi', 'fabricationSegments': 'Data_Pabrikasi', 'Pabrikasi_Segmen': 'Data_Pabrikasi', 'data_pabrikasi': 'Data_Pabrikasi', 'Data_Pabrikasi': 'Data_Pabrikasi',
+    'closing_plan_records': 'Closing_Rencana_Potong', 'closingPlanRecords': 'Closing_Rencana_Potong', 'Closing_Fisik': 'Closing_Rencana_Potong', 'closing_rencana_potong': 'Closing_Rencana_Potong', 'Closing_Rencana_Potong': 'Closing_Rencana_Potong',
+    'daily_closing_reports': 'Laporan_Closing', 'dailyClosingReports': 'Laporan_Closing', 'daily_reports': 'Laporan_Closing', 'Laporan_Closing': 'Laporan_Closing',
+    'stock_adjustments': 'Adjustment', 'stockAdjustments': 'Adjustment', 'Koreksi_Stok': 'Adjustment', 'Adjustment': 'Adjustment', 'adjustment': 'Adjustment',
+    'stores': 'Toko_Cabang', 'stores_list': 'Toko_Cabang', 'Toko_Cabang': 'Toko_Cabang',
+    'users': 'Pengguna', 'users_list': 'Pengguna', 'Pengguna': 'Pengguna',
+    'cogs_master': 'Master_COGS', 'cogsMaster': 'Master_COGS', 'Master_COGS': 'Master_COGS',
+    'data_susut': 'Data_Susut', 'dataSusut': 'Data_Susut', 'Data_Susut': 'Data_Susut',
+    'loss_config': 'Loss_Config', 'lossConfig': 'Loss_Config', 'Loss_Config': 'Loss_Config'
   };
   return map[table] || table;
 }
@@ -57,7 +64,7 @@ function resolveGASSheetName(table) {
  * Examples:
  *   ?action=ping
  *   ?action=getAllData
- *   ?action=getTable&table=Thawing_Daging
+ *   ?action=getTable&table=Data_Thawing
  */
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : 'getAllData';
@@ -81,11 +88,12 @@ function doGet(e) {
         stores: readTableData(ss, 'Toko_Cabang'),
         users: readTableData(ss, 'Pengguna'),
         cogsMaster: readTableData(ss, 'Master_COGS'),
-        thawingItems: readTableData(ss, 'Thawing_Daging'),
-        fabricationSegments: readTableData(ss, 'Pabrikasi_Segmen'),
-        closingPlanRecords: readTableData(ss, 'Closing_Fisik'),
+        thawingItems: readTableData(ss, 'Data_Thawing'),
+        fabricationSegments: readTableData(ss, 'Data_Pabrikasi'),
+        closingPlanRecords: readTableData(ss, 'Closing_Rencana_Potong'),
         dailyClosingReports: readTableData(ss, 'Laporan_Closing'),
-        stockAdjustments: readTableData(ss, 'Koreksi_Stok'),
+        stockAdjustments: readTableData(ss, 'Adjustment'),
+        dataSusut: readTableData(ss, 'Data_Susut'),
         lossConfig: readConfigData(ss)
       };
 
@@ -357,12 +365,93 @@ function readTableData(ss, sheetName) {
       }
     }
 
-    if (item.id || item.code || item.username || item.name || item.itemCode || item.planName) {
+    // Normalize properties so the frontend receives both original headers and convenient camelCase properties
+    if (item['nama bahan']) { item.name = item['nama bahan']; item.itemName = item['nama bahan']; }
+    if (item['rencana potong']) { item.planName = item['rencana potong']; }
+    if (item['rencana pabrikasi']) { item.plannedFabrication = item['rencana pabrikasi']; }
+    if (item['tanggal']) { item.date = item['tanggal']; }
+    if (item['user name']) { item.username = item['user name']; }
+    if (item['full name']) { item.fullName = item['full name']; }
+    if (item['store id']) { item.storeId = item['store id']; }
+    if (item['store name']) { item.storeName = item['store name']; }
+    if (item['id toko']) { item.storeId = item['id toko']; }
+    if (item['nama toko']) { item.storeName = item['nama toko']; }
+    if (item['item code']) { item.itemCode = item['item code']; }
+    if (item['item name']) { item.itemName = item['item name']; }
+    if (item['plan name']) { item.planName = item['plan name']; }
+    if (item['sisa kemarin'] !== undefined) { item.openingStockKg = Number(item['sisa kemarin']); }
+    if (item['diolah baru'] !== undefined) { item.newProcessedKg = Number(item['diolah baru']); }
+    if (item['sales real'] !== undefined) { item.salesKg = Number(item['sales real']); }
+    if (item['timbangan sisa stok akhir'] !== undefined) { item.actualClosingStockKg = Number(item['timbangan sisa stok akhir']); }
+    if (item['susut jual'] !== undefined) { item.susutJualKg = Number(item['susut jual']); item.susutJual = Number(item['susut jual']); }
+    if (item['susut proses'] !== undefined) { item.susutProses = Number(item['susut proses']); item.shrinkageThawing = Number(item['susut proses']); }
+    if (item['berat sebelum thawing'] !== undefined) { item.weightBeforeThawing = Number(item['berat sebelum thawing']); }
+    if (item['berat setelah thawing'] !== undefined) { item.weightAfterThawing = Number(item['berat setelah thawing']); }
+    if (item['foto']) { item.image = item['foto']; item.photoUrl = item['foto']; }
+    if (item['foto timbangan']) { item.photoUrl = item['foto timbangan']; }
+    if (item['catatan']) { item.note = item['catatan']; }
+    if (item['berat'] !== undefined) { item.weightKg = Number(item['berat']); }
+    if (item['alasan']) { item.reason = item['alasan']; }
+    if (item['jenis']) { item.type = item['jenis']; }
+
+    if (item.id || item.code || item.username || item.name || item.itemCode || item.planName || item['nama bahan'] || item['rencana potong'] || item['tanggal']) {
       rows.push(item);
     }
   }
 
   return rows;
+}
+
+function getRecordValueForHeaderGAS(record, header) {
+  if (!record || typeof record !== 'object') return '';
+  if (record[header] !== undefined && record[header] !== null) return record[header];
+  var norm = String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
+  var map = {
+    'namabahan': record.name || record.itemName || record.namaBahan || record.bahan || '',
+    'tanggal': record.date || record.tanggal || (record.createdAt ? extractYMD(record.createdAt) : '') || '',
+    'beratsebelumthawing': record.weightBeforeThawing || record.beratAwal || record.tally || 0,
+    'beratsetelahthawing': record.weightAfterThawing || record.netto || record.beratAkhir || 0,
+    'foto': record.photoUrl || record.image || record.foto || record.closingPhotoUrl || '',
+    'susutproses': record.susutProses || record.shrinkageThawing || record.totalProcessLoss || 0,
+    'durasithawing': record.durationMinutes ? (record.durationMinutes + ' menit') : (record.durasi || ''),
+    'status': record.status || '',
+    'kategori': record.category || record.pabrikasiCategory || '',
+    'rencanapabrikasi': record.plannedFabrication || record.rencanaPabrikasi || record.planName || '',
+    'daftarsegmenhasilpotongan': record.segmentName || record.daftarSegmen || '',
+    'tujuan': record.openingPurpose || record.tujuan || 'UNTUK DISPLAY',
+    'beratrencanapabrikasi': record.actualWeight || record.targetWeight || record.beratRencanaPabrikasi || 0,
+    'sisakemarin': record.openingStockKg !== undefined ? record.openingStockKg : (record.sisaKemarin !== undefined ? record.sisaKemarin : 0),
+    'diolahbaru': record.newProcessedKg !== undefined ? record.newProcessedKg : (record.diolahBaru !== undefined ? record.diolahBaru : 0),
+    'salesreal': record.salesKg !== undefined ? record.salesKg : (record.salesReal !== undefined ? record.salesReal : 0),
+    'timbangansisastokakhir': record.actualClosingStockKg !== undefined ? record.actualClosingStockKg : (record.timbanganSisaStokAkhir !== undefined ? record.timbanganSisaStokAkhir : 0),
+    'fototimbangan': record.photoUrl || record.fotoTimbangan || record.image || '',
+    'susutjual': record.susutJualKg !== undefined ? record.susutJualKg : (record.susutJual !== undefined ? record.susutJual : 0),
+    'catatan': record.note || record.catatan || '',
+    'id': record.id || '',
+    'username': record.username || record.userName || '',
+    'role': record.role || '',
+    'fullname': record.fullName || record.full_name || '',
+    'storeid': record.storeId || record.store_id || '',
+    'storename': record.storeName || record.store_name || '',
+    'createdat': record.createdAt || record.created_at || '',
+    'code': record.code || record.kode || '',
+    'name': record.name || record.nama || '',
+    'city': record.city || record.kota || '',
+    'itemcode': record.itemCode || record.kodeItem || '',
+    'itemname': record.itemName || record.namaItem || '',
+    'planname': record.planName || record.rencanaPotong || '',
+    'cogsperkg': record.cogsPerKg || 0,
+    'sellingprice': record.sellingPricePerKg || record.defaultPricePerKg || record.sellingPrice || 0,
+    'updatedat': record.updatedAt || record.updated_at || '',
+    'updatedby': record.updatedBy || record.updated_by || '',
+    'namatoko': record.storeName || record.namaToko || '',
+    'idtoko': record.storeId || record.idToko || '',
+    'jenis': record.type || record.jenis || 'IN',
+    'rencanapotong': record.planName || record.rencanaPotong || '',
+    'berat': record.weightKg || record.berat || 0,
+    'alasan': record.reason || record.alasan || '',
+  };
+  return map[norm] !== undefined ? map[norm] : (record[header] !== undefined ? record[header] : '');
 }
 
 /**
@@ -406,6 +495,9 @@ function writeTableData(ss, sheetName, items, customHeaders) {
     var row = [];
     for (var h = 0; h < headers.length; h++) {
       var val = item[headers[h]];
+      if (val === undefined || val === null || val === '') {
+        val = getRecordValueForHeaderGAS(item, headers[h]);
+      }
       if (val === undefined || val === null) {
         val = '';
       } else if (typeof val === 'boolean') {
@@ -498,6 +590,9 @@ function upsertSingleRecord(ss, sheetName, record) {
   for (var h = 0; h < headers.length; h++) {
     var key = headers[h];
     var val = record[key];
+    if (val === undefined || val === null || val === '') {
+      val = getRecordValueForHeaderGAS(record, key);
+    }
     if (val === undefined || val === null) {
       val = '';
     } else if (typeof val === 'boolean') {
