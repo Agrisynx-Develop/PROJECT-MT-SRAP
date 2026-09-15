@@ -1398,7 +1398,10 @@ async function startServer() {
 
   app.delete('/api/purge-date', async (req, res) => {
     try {
-      const targetDate = (req.query.date as string) || '2026-08-29';
+      const targetDate = req.query.date as string;
+      if (!targetDate) {
+        return res.status(400).json({ error: 'Parameter date is required' });
+      }
       inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter(
         (r) => (r.date || r.timestamp || '').split('T')[0] !== targetDate
       );
@@ -1819,14 +1822,26 @@ async function startServer() {
     try {
       const p = getPool();
       if (p) {
-        await p.query('TRUNCATE TABLE thawing_items, fabrication_segments, stock_adjustments, closing_plan_records, daily_closing_reports');
+        await p.query('TRUNCATE TABLE thawing_items, fabrication_segments, stock_adjustments, closing_plan_records, daily_closing_reports, data_susut');
       }
       inMemoryStore.thawingItems = [];
       inMemoryStore.fabricationSegments = [];
       inMemoryStore.stockAdjustments = [];
       inMemoryStore.closingPlanRecords = [];
       inMemoryStore.dailyClosingReports = [];
-      res.json({ success: true, message: 'Database reset successfully' });
+      inMemoryStore.dataSusut = [];
+      inMemoryStore.trainingFiles = [];
+      inMemoryStore.dailyTargets = [];
+      inMemoryStore.salesTrainingDataset = [];
+      inMemoryStore.pythonModels = [];
+
+      // Auto-reflect reset on Google Sheets backend if connected
+      syncAll8Tables().catch((e) => console.warn('[Reset] Sheets sync warning:', e));
+
+      res.json({
+        success: true,
+        message: 'Database transaksi berhasil dikosongkan. Master_COGS, Pengguna, dan Toko_Cabang tetap aman terjaga.'
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

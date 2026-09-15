@@ -29,49 +29,61 @@ const STORAGE_KEY_URL = 'google_sheets_apps_script_url';
 const STORAGE_KEY_LAST_SYNC = 'google_sheets_last_sync_time';
 
 /**
- * Normalizes table names to match Google Spreadsheet tab names
+ * Normalizes table names to match Google Spreadsheet 8 canonical tab names
  */
 export function normalizeSheetTableName(table: string): string {
   const map: Record<string, string> = {
-    thawing_items: 'Thawing_Daging',
-    Thawing_Daging: 'Thawing_Daging',
-    thawingItems: 'Thawing_Daging',
-    fabrication_segments: 'Pabrikasi_Segmen',
-    Pabrikasi_Segmen: 'Pabrikasi_Segmen',
-    fabricationSegments: 'Pabrikasi_Segmen',
-    closing_plan_records: 'Closing_Fisik',
-    Closing_Fisik: 'Closing_Fisik',
-    closingPlanRecords: 'Closing_Fisik',
-    daily_closing_reports: 'Laporan_Closing',
-    Laporan_Closing: 'Laporan_Closing',
-    dailyClosingReports: 'Laporan_Closing',
-    daily_reports: 'Laporan_Closing',
-    stock_adjustments: 'Koreksi_Stok',
-    Koreksi_Stok: 'Koreksi_Stok',
-    stockAdjustments: 'Koreksi_Stok',
-    stores: 'Toko_Cabang',
-    stores_list: 'Toko_Cabang',
-    Toko_Cabang: 'Toko_Cabang',
+    // 1. Data_Thawing
+    thawing_items: 'Data_Thawing',
+    Thawing_Daging: 'Data_Thawing',
+    thawingItems: 'Data_Thawing',
+    data_thawing: 'Data_Thawing',
+    Data_Thawing: 'Data_Thawing',
+
+    // 2. Data_Pabrikasi
+    fabrication_segments: 'Data_Pabrikasi',
+    Pabrikasi_Segmen: 'Data_Pabrikasi',
+    fabricationSegments: 'Data_Pabrikasi',
+    data_pabrikasi: 'Data_Pabrikasi',
+    Data_Pabrikasi: 'Data_Pabrikasi',
+
+    // 3. Closing_Rencana_Potong
+    closing_plan_records: 'Closing_Rencana_Potong',
+    Closing_Fisik: 'Closing_Rencana_Potong',
+    closingPlanRecords: 'Closing_Rencana_Potong',
+    closing_rencana_potong: 'Closing_Rencana_Potong',
+    Closing_Rencana_Potong: 'Closing_Rencana_Potong',
+    daily_closing_reports: 'Closing_Rencana_Potong',
+    Laporan_Closing: 'Closing_Rencana_Potong',
+    dailyClosingReports: 'Closing_Rencana_Potong',
+    daily_reports: 'Closing_Rencana_Potong',
+
+    // 4. Pengguna
     users: 'Pengguna',
     users_list: 'Pengguna',
     Pengguna: 'Pengguna',
+
+    // 5. Toko_Cabang
+    stores: 'Toko_Cabang',
+    stores_list: 'Toko_Cabang',
+    Toko_Cabang: 'Toko_Cabang',
+
+    // 6. Master_COGS
     cogs_master: 'Master_COGS',
     cogsMaster: 'Master_COGS',
     Master_COGS: 'Master_COGS',
-    loss_config: 'Loss_Config',
-    lossConfig: 'Loss_Config',
-    Loss_Config: 'Loss_Config',
+
+    // 7. Adjustment
+    stock_adjustments: 'Adjustment',
+    Koreksi_Stok: 'Adjustment',
+    stockAdjustments: 'Adjustment',
+    Adjustment: 'Adjustment',
+    adjustment: 'Adjustment',
+
+    // 8. Data_Susut
     data_susut: 'Data_Susut',
     dataSusut: 'Data_Susut',
     Data_Susut: 'Data_Susut',
-    Adjustment: 'Adjustment',
-    adjustment: 'Adjustment',
-    Data_Thawing: 'Data_Thawing',
-    data_thawing: 'Data_Thawing',
-    Data_Pabrikasi: 'Data_Pabrikasi',
-    data_pabrikasi: 'Data_Pabrikasi',
-    Closing_Rencana_Potong: 'Closing_Rencana_Potong',
-    closing_rencana_potong: 'Closing_Rencana_Potong',
   };
   return map[table] || table;
 }
@@ -352,7 +364,7 @@ export async function pushAllDataToSheets(data: AllSheetsData): Promise<boolean>
 }
 
 /**
- * Reset transaction data in Google Sheets
+ * Reset transaction data in Google Sheets (Preserves Master_COGS, Pengguna, Toko_Cabang)
  */
 export async function resetSheetsData(): Promise<boolean> {
   return postToSheets({
@@ -360,3 +372,36 @@ export async function resetSheetsData(): Promise<boolean> {
     timestamp: new Date().toISOString()
   });
 }
+
+/**
+ * Initialize / Format 8 Database Sheets in Google Sheets
+ */
+export async function initialize8Sheets(clearTransactions: boolean = false): Promise<{ success: boolean; message: string }> {
+  const url = getGoogleAppsScriptUrl();
+  if (!url) {
+    return { success: false, message: 'URL Google Apps Script belum disetel di pengaturan.' };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'init8Sheets',
+        clearTransactions,
+        timestamp: new Date().toISOString()
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return {
+        success: true,
+        message: data.message || (clearTransactions ? 'Berhasil inisialisasi 8-Sheet dan hapus data transaksi input.' : 'Berhasil menyelaraskan 8-Sheet Database di Google Sheets.')
+      };
+    }
+    return { success: false, message: 'Gagal inisialisasi sheet di Google Apps Script.' };
+  } catch (err: any) {
+    return { success: false, message: err.message || 'Error koneksi ke Google Apps Script.' };
+  }
+}
+

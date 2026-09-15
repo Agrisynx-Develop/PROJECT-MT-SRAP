@@ -184,12 +184,11 @@ export default function App() {
           }
           if (d.users && d.users.length > 0) setUsers(d.users);
           if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
-          if (d.thawingItems) setItems(deduplicateThawingItems((d.thawingItems || []).filter((i: any) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29')));
-          if (d.fabricationSegments) setSegments((d.fabricationSegments || []).filter((s: any) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== '2026-08-29'));
+          if (d.thawingItems) setItems(deduplicateThawingItems(d.thawingItems || []));
+          if (d.fabricationSegments) setSegments(d.fabricationSegments || []);
           if (d.closingPlanRecords) {
             const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
             const sanitized: ClosingPlanRecord[] = rawRecords
-              .filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29')
               .map((r: any) => ({
                 ...r,
                 openingStockKg: Number(r.openingStockKg) || 0,
@@ -204,9 +203,7 @@ export default function App() {
 
             // Merge with local records if local has newer closed timestamp or non-zero weight
             const local = getClosingPlanRecords();
-            const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
-              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-            );
+            const localList: ClosingPlanRecord[] = Array.isArray(local) ? local : [];
 
             // Robust merge: sheets/cloud base with local updates taking precedence
             const recordMap = new Map<string, ClosingPlanRecord>();
@@ -255,16 +252,14 @@ export default function App() {
               }
             });
 
-            const filteredMerged = Array.from(recordMap.values()).filter(
-              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-            );
+            const filteredMerged = Array.from(recordMap.values());
             setClosingRecords(filteredMerged);
             if (filteredMerged.length > 0) {
               saveClosingPlanRecords(filteredMerged);
             }
           }
-          if (d.dailyClosingReports) setReports(deduplicateDailyReports((d.dailyClosingReports || []).filter((r: any) => (r.date || '').split('T')[0] !== '2026-08-29')));
-          if (d.stockAdjustments) setAdjustments((d.stockAdjustments || []).filter((a: any) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'));
+          if (d.dailyClosingReports) setReports(deduplicateDailyReports(d.dailyClosingReports || []));
+          if (d.stockAdjustments) setAdjustments(d.stockAdjustments || []);
           if (d.lossConfig) setLossConfig(d.lossConfig);
           setLastCloudSync(new Date().toISOString());
           return;
@@ -346,12 +341,8 @@ export default function App() {
       if (resRecords && resRecords.ok) {
         const data = await resRecords.json();
         const local = getClosingPlanRecords();
-        const serverList: ClosingPlanRecord[] = (Array.isArray(data) ? data : []).filter(
-          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
-        const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
-          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
+        const serverList: ClosingPlanRecord[] = Array.isArray(data) ? data : [];
+        const localList: ClosingPlanRecord[] = Array.isArray(local) ? local : [];
 
         // Robust merge: server base with local updates taking priority
         const recordMap = new Map<string, ClosingPlanRecord>();
@@ -400,9 +391,7 @@ export default function App() {
           }
         });
 
-        const filtered = Array.from(recordMap.values()).filter(
-          (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
+        const filtered = Array.from(recordMap.values());
         setClosingRecords(filtered);
         if (filtered.length > 0) {
           saveClosingPlanRecords(filtered);

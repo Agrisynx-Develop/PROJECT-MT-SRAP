@@ -133,11 +133,11 @@ export default function AdminTokoView({
     const datesSet = new Set<string>();
     (items || []).forEach((i) => {
       const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-      if (d && d !== '2026-08-29') datesSet.add(d);
+      if (d) datesSet.add(d);
     });
     (closingRecords || []).forEach((c) => {
       const d = (c.date || c.timestamp || '').split('T')[0];
-      if (d && d !== '2026-08-29') datesSet.add(d);
+      if (d) datesSet.add(d);
     });
     return Array.from(datesSet).sort().reverse();
   }, [items, closingRecords]);

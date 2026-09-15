@@ -20,6 +20,7 @@ import {
   deleteRecordFromSheets,
   updateTableInSheets,
   getGoogleAppsScriptUrl,
+  initialize8Sheets,
   AllSheetsData
 } from './sheetsApi';
 import { normalizePlanName, getDeterministicClosingRecordId } from './storeHelper';
@@ -292,29 +293,20 @@ export const getClosingPlanRecords = (): ClosingPlanRecord[] => {
   try {
     const parsed = JSON.parse(data);
     if (!Array.isArray(parsed)) return [];
-    // Filter out unwanted test dates such as 2026-08-29
-    return parsed.filter((r) => {
-      const d = (r.date || r.timestamp || '').split('T')[0];
-      return d !== '2026-08-29';
-    });
+    return parsed;
   } catch {
     return [];
   }
 };
 
 export const saveClosingPlanRecords = (records: ClosingPlanRecord[], updatedSingleRecord?: ClosingPlanRecord) => {
-  // Always sanitize before saving
-  const sanitized = records.filter((r) => {
-    const d = (r.date || r.timestamp || '').split('T')[0];
-    return d !== '2026-08-29';
-  });
-  safeSetItem('closing_plan_records', JSON.stringify(sanitized));
-  postApiBackground('/api/closing-records', sanitized);
+  safeSetItem('closing_plan_records', JSON.stringify(records));
+  postApiBackground('/api/closing-records', records);
   if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleRecord && (updatedSingleRecord.date || updatedSingleRecord.timestamp || '').split('T')[0] !== '2026-08-29') {
-      upsertRecordToSheets('Closing_Fisik', updatedSingleRecord);
+    if (updatedSingleRecord) {
+      upsertRecordToSheets('Closing_Rencana_Potong', updatedSingleRecord);
     } else {
-      updateTableInSheets('Closing_Fisik', sanitized);
+      updateTableInSheets('Closing_Rencana_Potong', records);
     }
   }
 };
@@ -325,15 +317,16 @@ export const deleteClosingPlanRecord = (id: string): ClosingPlanRecord[] => {
   safeSetItem('closing_plan_records', JSON.stringify(updated));
   fetch(`/api/closing-records/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Closing_Fisik', id);
+    deleteRecordFromSheets('Closing_Rencana_Potong', id);
   }
   return updated;
 };
 
 /**
- * Purge all records across all tables for a specific date (default: 2026-08-29)
+ * Purge all records across all tables for a specific date
  */
-export const purgeDateRecords = (dateToPurge: string = '2026-08-29') => {
+export const purgeDateRecords = (dateToPurge: string) => {
+  if (!dateToPurge) return;
   try {
     // 1. Closing Plan Records
     const closingKey = 'closing_plan_records';
@@ -431,13 +424,6 @@ export const purgeDateRecords = (dateToPurge: string = '2026-08-29') => {
     console.warn(`[Purge] Error clearing records for ${dateToPurge}:`, err);
   }
 };
-
-// Immediately execute purge of 2026-08-29 on module evaluation
-try {
-  purgeDateRecords('2026-08-29');
-} catch {
-  // ignore
-}
 
 
 export const deduplicateThawingItems = (rawItems: ThawingItem[]): ThawingItem[] => {
@@ -585,15 +571,31 @@ export const saveLossConfig = (config: LossAlertConfig) => {
 };
 
 export const resetDatabase = async () => {
+  // Wipe all transaction / input stores
   localStorage.removeItem('thawing_items');
   localStorage.removeItem('fabrication_segments');
   localStorage.removeItem('stock_adjustments');
   localStorage.removeItem('closing_plan_records');
   localStorage.removeItem('daily_reports');
+  localStorage.removeItem('data_susut');
+  localStorage.removeItem('training_files_records');
+  localStorage.removeItem('sales_training_dataset');
+  localStorage.removeItem('python_ml_models');
+
+  // Trigger server-side truncate
   try {
     await fetch('/api/database/reset', { method: 'POST' });
   } catch {
     // ignore
+  }
+
+  // Trigger Google Sheets reset if connected (preserves Master_COGS and Pengguna)
+  if (getGoogleAppsScriptUrl()) {
+    try {
+      await initialize8Sheets(true);
+    } catch {
+      // ignore
+    }
   }
 };
 
@@ -649,9 +651,7 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
     // 4. Thawing Items / Bahan Baku Masuk (Defensive Smart Merge: NEVER duplicate items!)
     const currentLocalItems = getThawingItems();
     const candidateItems = [...(d.thawingItems || []), ...currentLocalItems];
-    const mergedItems = deduplicateThawingItems(candidateItems).filter(
-      (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'
-    );
+    const mergedItems = deduplicateThawingItems(candidateItems);
     safeSetItem('thawing_items', JSON.stringify(mergedItems));
     d.thawingItems = mergedItems;
 
@@ -685,7 +685,7 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
 
     // Index cloud closing records
     (d.closingPlanRecords || []).forEach((c) => {
-      if (c && (c.date || c.timestamp || '').split('T')[0] !== '2026-08-29') {
+      if (c) {
         const key = c.id || makeClosingKey(c);
         closingMap.set(key, c);
       }
@@ -693,7 +693,7 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
 
     // Merge with local records
     currentLocalClosing.forEach((loc) => {
-      if (!loc || (loc.date || loc.timestamp || '').split('T')[0] === '2026-08-29') return;
+      if (!loc) return;
       const keyById = loc.id;
       const keyByProp = makeClosingKey(loc);
       let foundKey: string | undefined = undefined;
@@ -728,17 +728,13 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
       }
     });
 
-    const mergedClosing = Array.from(closingMap.values()).filter(
-      (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-    );
+    const mergedClosing = Array.from(closingMap.values());
     safeSetItem('closing_plan_records', JSON.stringify(mergedClosing));
     d.closingPlanRecords = mergedClosing;
 
     // 7. Daily Closing Reports (Rekap Harian)
     const currentLocalReports = getDailyReports();
-    const candidateReports = [...(d.dailyClosingReports || []), ...currentLocalReports].filter(
-      (r) => r && r.date && r.date.split('T')[0] !== '2026-08-29'
-    );
+    const candidateReports = [...(d.dailyClosingReports || []), ...currentLocalReports];
     const mergedReports = deduplicateDailyReports(candidateReports);
     safeSetItem('daily_reports', JSON.stringify(mergedReports));
     d.dailyClosingReports = mergedReports;
@@ -755,9 +751,7 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
         adjMap.set(String(loc.id), loc);
       }
     });
-    const mergedAdjs = Array.from(adjMap.values()).filter(
-      (a) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'
-    );
+    const mergedAdjs = Array.from(adjMap.values());
     safeSetItem('stock_adjustments', JSON.stringify(mergedAdjs));
     d.stockAdjustments = mergedAdjs;
 

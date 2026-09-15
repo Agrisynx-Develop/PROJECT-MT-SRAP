@@ -65,15 +65,15 @@ export default function SavedDataViewerModal({
     const set = new Set<string>();
     closingRecords.forEach((c) => {
       const d = (c.date || c.timestamp || '').split('T')[0];
-      if (d && d !== '2026-08-29') set.add(d);
+      if (d) set.add(d);
     });
     items.forEach((i) => {
       const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-      if (d && d !== '2026-08-29') set.add(d);
+      if (d) set.add(d);
     });
     reports.forEach((r) => {
       const d = (r.date || '').split('T')[0];
-      if (d && d !== '2026-08-29') set.add(d);
+      if (d) set.add(d);
     });
     return Array.from(set).sort().reverse();
   }, [closingRecords, items, reports]);
@@ -83,7 +83,6 @@ export default function SavedDataViewerModal({
     return closingRecords.filter((r) => {
       if (!matchStoreEntity(r.storeId, currentStore)) return false;
       const recDate = (r.date || r.timestamp || '').split('T')[0];
-      if (recDate === '2026-08-29') return false;
       if (filterDate !== 'ALL' && recDate !== filterDate) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -104,7 +103,6 @@ export default function SavedDataViewerModal({
     return items.filter((i) => {
       if (!matchStoreEntity(i.storeId, currentStore)) return false;
       const itemDate = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-      if (itemDate === '2026-08-29') return false;
       if (filterDate !== 'ALL' && itemDate !== filterDate) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -125,7 +123,6 @@ export default function SavedDataViewerModal({
     return reports.filter((r) => {
       if (!matchStoreEntity(r.storeId, currentStore)) return false;
       const repDate = (r.date || '').split('T')[0];
-      if (repDate === '2026-08-29') return false;
       if (filterDate !== 'ALL' && repDate !== filterDate) return false;
       return true;
     });
