@@ -442,34 +442,28 @@ try {
 
 export const deduplicateThawingItems = (rawItems: ThawingItem[]): ThawingItem[] => {
   if (!Array.isArray(rawItems)) return [];
-  const mapBySemantic = new Map<string, ThawingItem>();
+  const mapById = new Map<string, ThawingItem>();
 
   for (const item of rawItems) {
     if (!item) continue;
     const id = item.id || `meat_${Math.random().toString(36).substring(2, 8)}`;
-    const storeId = item.storeId || '1';
-    const datePart = (item.createdAt || item.thawingStartTime || '').split('T')[0] || 'nodate';
-    const nameNorm = (item.name || '').trim().toLowerCase();
-    const planNorm = (item.plannedFabrication || '').trim().toLowerCase();
-    const wBefore = (Number(item.weightBeforeThawing) || 0).toFixed(3);
-    const wAfter = (Number(item.weightAfterThawing !== null && item.weightAfterThawing !== undefined ? item.weightAfterThawing : item.weightBeforeThawing) || 0).toFixed(3);
     const hasPhoto = Boolean(item.image && item.image !== 'placeholder' && item.image.trim());
 
-    // Strict semantic signature: store + date + name + plan + tally + netto
-    const semKey = `${storeId}_${datePart}_${nameNorm}_${planNorm}_${wBefore}_${wAfter}`;
-
-    if (mapBySemantic.has(semKey)) {
-      const existing = mapBySemantic.get(semKey)!;
+    if (mapById.has(id)) {
+      const existing = mapById.get(id)!;
       const existingHasPhoto = Boolean(existing.image && existing.image !== 'placeholder' && existing.image.trim());
-      if (hasPhoto && !existingHasPhoto) {
-        mapBySemantic.set(semKey, { ...item, id: existing.id || item.id });
-      }
+      mapById.set(id, {
+        ...existing,
+        ...item,
+        id,
+        image: hasPhoto ? item.image : (existingHasPhoto ? existing.image : item.image),
+      });
     } else {
-      mapBySemantic.set(semKey, { ...item, id });
+      mapById.set(id, { ...item, id });
     }
   }
 
-  return Array.from(mapBySemantic.values());
+  return Array.from(mapById.values());
 };
 
 export const deduplicateDailyReports = (reports: DailyClosingReport[]): DailyClosingReport[] => {
