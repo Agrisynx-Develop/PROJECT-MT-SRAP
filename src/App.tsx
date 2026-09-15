@@ -51,6 +51,7 @@ import {
   pushAllDataToSheets,
 } from './utils/sheetsApi';
 import { matchStoreEntity, getEffectiveStore, isMatchPlan, getDeterministicClosingRecordId } from './utils/storeHelper';
+import { findHMinus1ClosingRecord, propagateClosingToNextDay, getNextDateStr } from './utils/dateUtils';
 
 // Auth Screen
 import LoginScreen from './components/LoginScreen';
@@ -1073,10 +1074,29 @@ export default function App() {
   const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string; timestamp?: string }) => {
     const cleanDate = (record.date || '').split('T')[0] || new Date().toISOString().split('T')[0];
     const recId = record.id || getDeterministicClosingRecordId(record.storeId, record.planName, cleanDate);
+
+    // Business Logic: Data H-1 hari inilah yang baru terhitung menjadi sisa kemarin / stock awal tanggal ini
+    let finalOpeningKg = typeof record.openingStockKg === 'number' ? record.openingStockKg : 0;
+    if (finalOpeningKg === 0) {
+      const h1Rec = findHMinus1ClosingRecord(closingRecords, { id: record.storeId }, record.planName, cleanDate);
+      if (h1Rec && typeof h1Rec.actualClosingStockKg === 'number') {
+        finalOpeningKg = h1Rec.actualClosingStockKg;
+      }
+    }
+
+    const totalTersedia = finalOpeningKg + (record.newProcessedKg || 0) + (record.adjustInKg || 0) - (record.adjustOutKg || 0);
+    const closingBySystem = Math.max(0, totalTersedia - (record.salesKg || 0));
+    const susutJual = typeof record.actualClosingStockKg === 'number'
+      ? Math.max(0, closingBySystem - record.actualClosingStockKg)
+      : (record.susutJualKg || 0);
+
     const newRec: ClosingPlanRecord = {
       ...record,
       id: recId,
       date: cleanDate,
+      openingStockKg: parseFloat(finalOpeningKg.toFixed(3)),
+      closingStockBySystemKg: parseFloat(closingBySystem.toFixed(3)),
+      susutJualKg: parseFloat(susutJual.toFixed(3)),
       timestamp: record.timestamp || (cleanDate ? `${cleanDate}T17:00:00.000Z` : new Date().toISOString()),
     };
     
@@ -1095,6 +1115,10 @@ export default function App() {
       } else {
         updated = [newRec, ...prev];
       }
+
+      // Propagate: Data closing hari ini langsung menjadi sisa kemarin (stok awal) untuk H+1 (hari esok) jika record H+1 sudah ada
+      updated = propagateClosingToNextDay(newRec, updated);
+
       saveClosingPlanRecords(updated, newRec);
       return updated;
     });
@@ -1289,7 +1313,34 @@ export default function App() {
   };
 
   const handleDeleteClosingRecord = (id: string) => {
-    const updated = closingRecords.filter((r) => r.id !== id);
+    const deletedRec = closingRecords.find((r) => r.id === id);
+    let updated = closingRecords.filter((r) => r.id !== id);
+
+    if (deletedRec) {
+      const cleanDate = (deletedRec.date || deletedRec.timestamp || '').split('T')[0];
+      const nextDate = getNextDateStr(cleanDate);
+      // Jika H-1 dihapus, maka sisa kemarin untuk H+1 kembali menjadi 0 (terisolasi harian)
+      updated = updated.map((r) => {
+        const rDate = (r.date || r.timestamp || '').split('T')[0];
+        if (
+          rDate === nextDate &&
+          matchStoreEntity(r.storeId, { id: deletedRec.storeId }) &&
+          isMatchPlan(r.planName, deletedRec.planName)
+        ) {
+          const totalTersedia = (r.newProcessedKg || 0) + (r.adjustInKg || 0) - (r.adjustOutKg || 0);
+          const closingStockBySystemKg = Math.max(0, totalTersedia - (r.salesKg || 0));
+          const susutJualKg = Math.max(0, closingStockBySystemKg - (r.actualClosingStockKg || 0));
+          return {
+            ...r,
+            openingStockKg: 0,
+            closingStockBySystemKg: parseFloat(closingStockBySystemKg.toFixed(3)),
+            susutJualKg: parseFloat(susutJualKg.toFixed(3)),
+          };
+        }
+        return r;
+      });
+    }
+
     setClosingRecords(updated);
     saveClosingPlanRecords(updated);
     deleteClosingPlanRecord(id);
