@@ -6,14 +6,17 @@ export interface Store {
   name: string;
   city: string;
   createdAt: string;
-}export type UserRole = 'butcher' | 'admin' | 'md';
+}
 
-export interface Store {
+export interface DataSusutRecord {
   id: string;
-  code: string;
-  name: string;
-  city: string;
-  createdAt: string;
+  date: string; // YYYY-MM-DD
+  storeName: string;
+  storeId: string;
+  planName: string;
+  susutProses: number; // Susut proses (Tally - Netto) Kg
+  susutJual: number; // Susut jual (Sistem - Fisik) Kg
+  createdAt?: string;
 }
 
 export interface UserAccount {
