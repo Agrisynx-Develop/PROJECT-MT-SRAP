@@ -114,3 +114,15 @@ export const dailyClosingReports = pgTable('daily_closing_reports', {
   butcherName: text('butcher_name').notNull(),
   createdAt: text('created_at').notNull(),
 });
+
+export const dataSusut = pgTable('data_susut', {
+  id: text('id').primaryKey(),
+  date: text('date').notNull(),
+  storeName: text('store_name').notNull(),
+  storeId: text('store_id').notNull(),
+  planName: text('plan_name').notNull(),
+  susutProses: real('susut_proses').notNull(),
+  susutJual: real('susut_jual').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
