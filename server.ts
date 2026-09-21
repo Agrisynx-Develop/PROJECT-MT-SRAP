@@ -675,8 +675,10 @@ async function startServer() {
     'Laporan_Closing': ['id', 'storeId', 'storeName', 'date', 'totalWeightRaw', 'totalWeightAfterThawing', 'totalWeightFabricated', 'totalPeriodicShrinkage', 'totalSales', 'totalEndStock', 'thawingLossPercent', 'fabricationLossPercent', 'salesLossPercent', 'overallLossPercent', 'statusAlert', 'closingPhotoUrl', 'butcherName', 'createdAt'],
   };
 
+  let runtimeAppsScriptUrl = process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL || process.env.VITE_GOOGLE_SHEETS_APPS_SCRIPT_URL || '';
+
   const syncToSheetsBackend = async (table: string, items: any[]) => {
-    const appsScriptUrl = process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
+    const appsScriptUrl = runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
     if (!appsScriptUrl) return;
 
     try {
@@ -703,7 +705,7 @@ async function startServer() {
   };
 
   const syncAll8Tables = async () => {
-    const appsScriptUrl = process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
+    const appsScriptUrl = runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
     if (!appsScriptUrl) return;
 
     console.log('[Google Sheets Backend] Initiating complete 8-table mirroring to Google Sheets...');
@@ -723,6 +725,41 @@ async function startServer() {
     }
     console.log('[Google Sheets Backend] Complete 8-table mirroring finished.');
   };
+
+  // Google Sheets Apps Script URL Configuration API
+  app.get('/api/config/sheets-url', (req, res) => {
+    res.json({
+      url: runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL || ''
+    });
+  });
+
+  app.post('/api/config/sheets-url', (req, res) => {
+    const { url } = req.body || {};
+    if (typeof url === 'string') {
+      runtimeAppsScriptUrl = url.trim();
+      process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL = runtimeAppsScriptUrl;
+    }
+    res.json({ success: true, url: runtimeAppsScriptUrl });
+  });
+
+  // Proxy endpoint for Google Sheets to prevent CORS & 302 redirect issues on clients
+  app.post('/api/sheets-proxy', async (req, res) => {
+    const targetUrl = req.body?.url || runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
+    if (!targetUrl) {
+      return res.status(400).json({ success: false, error: 'URL Google Apps Script belum dikonfigurasi di server.' });
+    }
+    try {
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(req.body?.payload || req.body),
+      });
+      const data = await response.json();
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   // ----------------- STORES -----------------
   app.get('/api/stores', async (req, res) => {
