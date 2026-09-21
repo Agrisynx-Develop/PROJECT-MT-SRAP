@@ -107,9 +107,10 @@ export function resolveUserFromInput(usernameInput: any): UserAccount {
     matchedStore = allStores[0];
   }
 
-  const codeLower = matchedStore?.code.toLowerCase() || 'ckt';
-  const storeName = matchedStore?.name || 'TDN Cikut';
-  const storeId = matchedStore?.id || 'store_ckt';
+  const codeLower = matchedStore?.code.toLowerCase() || 'ckr';
+  const storeName = matchedStore?.name || 'TDN CKR';
+  const storeId = matchedStore?.id || '1';
+  const partnerRole = role === 'butcher' ? 'admin' : 'butcher';
 
   return {
     id: `user_${role}_${codeLower}`,
@@ -118,15 +119,40 @@ export function resolveUserFromInput(usernameInput: any): UserAccount {
     storeId,
     storeName,
     fullName: `${role === 'butcher' ? 'Butcher' : 'Admin'} ${storeName}`,
+    linkedAccountId: `user_${partnerRole}_${codeLower}`,
     createdAt: new Date().toISOString(),
   };
 }
 
 // --- DATABASE SYNCHRONIZATION HELPERS ---
 
+export const DEFAULT_STORES: Store[] = [
+  { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' },
+  { id: '2', code: 'BKS', name: 'TDN BKS', city: 'Bekasi', createdAt: '2026-01-15' },
+  { id: '3', code: 'BDG', name: 'TDN BDG', city: 'Bandung', createdAt: '2026-02-01' },
+];
+
+export const DEFAULT_USERS: UserAccount[] = [
+  { id: '1', username: 'butcher_ckr', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher TDN CKR', linkedAccountId: '2', createdAt: '2026-01-01' },
+  { id: '2', username: 'admin_ckr', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin TDN CKR', linkedAccountId: '1', createdAt: '2026-01-01' },
+  { id: '3', username: 'md_pusat', role: 'md', storeId: undefined, storeName: undefined, fullName: 'Chief Merchandiser (MD Pusat)', createdAt: '2026-01-01' },
+  { id: '4', username: 'butcher_bks', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher TDN BKS', linkedAccountId: '5', createdAt: '2026-01-15' },
+  { id: '5', username: 'admin_bks', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin TDN BKS', linkedAccountId: '4', createdAt: '2026-01-15' },
+  { id: '6', username: 'butcher_bdg', role: 'butcher', storeId: '3', storeName: 'TDN BDG', fullName: 'Butcher TDN BDG', linkedAccountId: '7', createdAt: '2026-02-01' },
+  { id: '7', username: 'admin_bdg', role: 'admin', storeId: '3', storeName: 'TDN BDG', fullName: 'Admin TDN BDG', linkedAccountId: '6', createdAt: '2026-02-01' },
+];
+
 export const getStores = (): Store[] => {
   const data = localStorage.getItem('stores_list');
-  return data ? JSON.parse(data) : [];
+  if (data) {
+    try {
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // Fallback
+    }
+  }
+  return DEFAULT_STORES;
 };
 
 export const saveStores = (stores: Store[]) => {
@@ -139,7 +165,15 @@ export const saveStores = (stores: Store[]) => {
 
 export const getUsers = (): UserAccount[] => {
   const data = localStorage.getItem('users_list');
-  return data ? JSON.parse(data) : [];
+  if (data) {
+    try {
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // Fallback
+    }
+  }
+  return DEFAULT_USERS;
 };
 
 export const saveUsers = (users: UserAccount[]) => {
@@ -153,19 +187,15 @@ export const saveUsers = (users: UserAccount[]) => {
 export const getCurrentUser = (): UserAccount => {
   const data = localStorage.getItem('current_logged_user');
   if (!data) {
-    const defaultUser: UserAccount = {
-      id: 'user_butcher_ckt',
-      username: 'butcher_ckt',
-      role: 'butcher',
-      storeId: 'store_ckt',
-      storeName: 'TDN Cikut',
-      fullName: 'Butcher TDN Cikut',
-      createdAt: '2026-01-01',
-    };
+    const defaultUser: UserAccount = DEFAULT_USERS[0];
     localStorage.setItem('current_logged_user', JSON.stringify(defaultUser));
     return defaultUser;
   }
-  return JSON.parse(data);
+  try {
+    return JSON.parse(data);
+  } catch {
+    return DEFAULT_USERS[0];
+  }
 };
 
 export const setCurrentUser = (user: UserAccount) => {
