@@ -46,7 +46,6 @@ import {
   deleteThawingItemFromCloud,
   deduplicateThawingItems,
   deduplicateDailyReports,
-  resolveUserFromInput,
 } from './utils/db';
 import {
   getGoogleAppsScriptUrl,
@@ -1866,51 +1865,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Quick Role Switcher (Allows instant testing across Butcher, Admin, and MD) */}
-        <div className="px-3 pb-2">
-          <div className="p-1.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between gap-1 text-[10px]">
-            <button
-              onClick={() => {
-                const u = resolveUserFromInput('butcher_ckr');
-                setCurrentUserState(u);
-                localStorage.setItem('current_logged_user', JSON.stringify(u));
-              }}
-              className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
-                userRole === 'butcher' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-              title="Ganti ke Petugas Butcher"
-            >
-              🥩 Butcher
-            </button>
-            <button
-              onClick={() => {
-                const u = resolveUserFromInput('admin_ckr');
-                setCurrentUserState(u);
-                localStorage.setItem('current_logged_user', JSON.stringify(u));
-              }}
-              className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
-                userRole === 'admin' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-              title="Ganti ke Admin Toko"
-            >
-              🏢 Admin
-            </button>
-            <button
-              onClick={() => {
-                const u = resolveUserFromInput('md_pusat');
-                setCurrentUserState(u);
-                localStorage.setItem('current_logged_user', JSON.stringify(u));
-              }}
-              className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
-                userRole === 'md' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-              title="Ganti ke MD Pusat"
-            >
-              🌐 MD
-            </button>
-          </div>
-        </div>
-
         {/* MD Store Switcher when inspecting store modules */}
         {userRole === 'md' && stores.length > 0 && (
           <div className="px-3 pb-2">
@@ -2099,49 +2053,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              </div>
-
-              {/* Quick Role Switcher Mobile */}
-              <div className="p-1.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between gap-1 text-[10px]">
-                <button
-                  onClick={() => {
-                    const u = resolveUserFromInput('butcher_ckr');
-                    setCurrentUserState(u);
-                    localStorage.setItem('current_logged_user', JSON.stringify(u));
-                  }}
-                  className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
-                    userRole === 'butcher' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="Ganti ke Petugas Butcher"
-                >
-                  🥩 Butcher
-                </button>
-                <button
-                  onClick={() => {
-                    const u = resolveUserFromInput('admin_ckr');
-                    setCurrentUserState(u);
-                    localStorage.setItem('current_logged_user', JSON.stringify(u));
-                  }}
-                  className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
-                    userRole === 'admin' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="Ganti ke Admin Toko"
-                >
-                  🏢 Admin
-                </button>
-                <button
-                  onClick={() => {
-                    const u = resolveUserFromInput('md_pusat');
-                    setCurrentUserState(u);
-                    localStorage.setItem('current_logged_user', JSON.stringify(u));
-                  }}
-                  className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
-                    userRole === 'md' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="Ganti ke MD Pusat"
-                >
-                  🌐 MD
-                </button>
               </div>
 
               {/* MD Store Switcher in Drawer */}
