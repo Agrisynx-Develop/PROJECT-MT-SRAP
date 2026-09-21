@@ -59,6 +59,15 @@ export function getEffectiveStore(
   }
 
   if (userRole === 'md') {
+    if (selectedStoreIdForMd === 'all' || selectedStoreIdForMd === 'all_stores') {
+      return {
+        id: 'all',
+        code: 'ALL',
+        name: 'Semua Cabang',
+        city: 'Seluruh Toko',
+        createdAt: '2026-01-01',
+      };
+    }
     const found = stores.find((s) => s.id === selectedStoreIdForMd || matchStoreEntity(selectedStoreIdForMd, s));
     if (found) return found;
   } else if (currentUserStoreId) {
