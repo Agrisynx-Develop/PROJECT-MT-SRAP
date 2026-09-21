@@ -54,7 +54,7 @@ var CANONICAL_SHEETS = [
 var TABLE_SCHEMAS = {
   'Data_Thawing': ['id', 'id toko', 'nama toko', 'nama bahan', 'kategori', 'rencana pabrikasi', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status', 'waktu mulai', 'petugas butcher'],
   'Data_Pabrikasi': ['id', 'id item', 'id toko', 'nama toko', 'nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi', 'susut pabrikasi', 'foto'],
-  'Closing_Rencana_Potong': ['tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
+  'Closing_Rencana_Potong': ['id', 'tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
   'Pengguna': ['id', 'user name', 'role', 'full name', 'store id', 'store name', 'created at'],
   'Toko_Cabang': ['id', 'code', 'name', 'city', 'created at'],
   'Master_COGS': ['id', 'item code', 'item name', 'plan name', 'cogs per kg', 'selling price', 'kategori', 'updated at', 'updated by'],
@@ -626,13 +626,13 @@ function readTableData(ss, sheetName) {
         var n = (item.name || 'meat').replace(/[^a-zA-Z0-9]/g, '');
         var w = item.weightBeforeThawing || 0;
         var s = item.storeId || '1';
-        item.id = 'thaw_' + s + '_' + n + '_' + d + '_' + Math.round(w * 100);
+        item.id = 'thaw_' + s + '_' + n + '_' + d + '_' + Math.round(w * 100) + '_r' + (i + 1);
       } else if (sheetName === 'Data_Pabrikasi') {
         var d = item.date || item.createdAt || 'nodate';
         var n = (item.name || 'seg').replace(/[^a-zA-Z0-9]/g, '');
         var seg = (item.segmentName || '').replace(/[^a-zA-Z0-9]/g, '');
         var s = item.storeId || '1';
-        item.id = 'seg_' + s + '_' + n + '_' + seg + '_' + d;
+        item.id = 'seg_' + s + '_' + n + '_' + seg + '_' + d + '_r' + (i + 1);
       }
     }
 
@@ -789,60 +789,45 @@ function upsertSingleRecord(ss, sheetName, record) {
     var row = values[r];
     var rowId = idColIdx >= 0 ? String(row[idColIdx] || '').trim() : '';
 
-    // 1. Direct ID Match
+    // 1. Direct ID Match (Primary identifier for all physical meat items and segments)
     if (targetId && rowId && targetId === rowId) {
       rowIndexToUpdate = r + 1;
       break;
     }
 
-    // 2. Data_Thawing: Match by date + nama bahan
-    if (sheetName === 'Data_Thawing' && dateColIdx >= 0 && namaBahanColIdx >= 0) {
-      var rDate = extractYMD(row[dateColIdx]);
-      var rName = normalizeStrGAS(row[namaBahanColIdx]);
-      if (rDate === targetDate && rName === targetName) {
-        rowIndexToUpdate = r + 1;
-        break;
-      }
-    }
+    // Notice: For Data_Thawing and Data_Pabrikasi, we DO NOT do fuzzy date+name matching!
+    // A butcher can thaw multiple batches of the same cut (e.g. 2 boxes of HQ 41/42/44/45, 20 kg each) on the same date.
+    // Overwriting by date + name would overwrite duplicate cuts of meat!
+    // They must be appended as individual rows if targetId does not match an existing row.
 
-    // 3. Data_Pabrikasi: Match by date + nama bahan + segment
-    if (sheetName === 'Data_Pabrikasi' && dateColIdx >= 0 && namaBahanColIdx >= 0) {
-      var rDate = extractYMD(row[dateColIdx]);
-      var rName = normalizeStrGAS(row[namaBahanColIdx]);
-      var rSeg = segmenColIdx >= 0 ? normalizeStrGAS(row[segmenColIdx]) : '';
-      if (rDate === targetDate && rName === targetName && (!targetSegment || rSeg === targetSegment)) {
-        rowIndexToUpdate = r + 1;
-        break;
-      }
-    }
-
-    // 4. Closing_Rencana_Potong: Match by date + nama bahan
+    // 2. Closing_Rencana_Potong: Match by date + id toko + plan name
     if (sheetName === 'Closing_Rencana_Potong' && dateColIdx >= 0 && namaBahanColIdx >= 0) {
       var rDate = extractYMD(row[dateColIdx]);
       var rName = normalizeStrGAS(row[namaBahanColIdx]);
-      if (rDate === targetDate && rName === targetName) {
+      var rStore = idTokoColIdx >= 0 ? normalizeStrGAS(row[idTokoColIdx]) : '';
+      if (rDate === targetDate && rName === targetName && (!targetStore || !rStore || rStore === targetStore)) {
         rowIndexToUpdate = r + 1;
         break;
       }
     }
 
-    // 5. Adjustment: Match by date + id toko + rencana potong
+    // 3. Adjustment: Match by date + id toko + rencana potong
     if (sheetName === 'Adjustment' && dateColIdx >= 0 && rencanaPotongColIdx >= 0) {
       var rDate = extractYMD(row[dateColIdx]);
       var rPlan = normalizeStrGAS(row[rencanaPotongColIdx]);
       var rStore = idTokoColIdx >= 0 ? normalizeStrGAS(row[idTokoColIdx]) : '';
-      if (rDate === targetDate && rPlan === targetName && (!targetStore || rStore === targetStore)) {
+      if (rDate === targetDate && rPlan === targetName && (!targetStore || !rStore || rStore === targetStore)) {
         rowIndexToUpdate = r + 1;
         break;
       }
     }
 
-    // 6. Data_Susut: Match by date + id toko + rencana potong
+    // 4. Data_Susut: Match by date + id toko + rencana potong
     if (sheetName === 'Data_Susut' && dateColIdx >= 0 && rencanaPotongColIdx >= 0) {
       var rDate = extractYMD(row[dateColIdx]);
       var rPlan = normalizeStrGAS(row[rencanaPotongColIdx]);
       var rStore = idTokoColIdx >= 0 ? normalizeStrGAS(row[idTokoColIdx]) : '';
-      if (rDate === targetDate && rPlan === targetName && (!targetStore || rStore === targetStore)) {
+      if (rDate === targetDate && rPlan === targetName && (!targetStore || !rStore || rStore === targetStore)) {
         rowIndexToUpdate = r + 1;
         break;
       }
