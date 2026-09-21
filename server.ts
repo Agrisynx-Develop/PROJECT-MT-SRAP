@@ -54,11 +54,13 @@ const inMemoryStore = {
     { id: '3', code: 'BDG', name: 'TDN BDG', city: 'Bandung', createdAt: '2026-02-01' },
   ],
   users: [
-    { id: '1', username: 'butcher_ckr', password: 'butcher123', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher CKR', createdAt: '2026-01-01' },
-    { id: '2', username: 'admin_ckr', password: 'admin123', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin CKR', createdAt: '2026-01-01' },
+    { id: '1', username: 'butcher_ckr', password: 'butcher123', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher CKR', linkedAccountId: '2', createdAt: '2026-01-01' },
+    { id: '2', username: 'admin_ckr', password: 'admin123', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin CKR', linkedAccountId: '1', createdAt: '2026-01-01' },
     { id: '3', username: 'md_pusat', password: 'md123', role: 'md', storeId: null, storeName: null, fullName: 'MD Pusat', createdAt: '2026-01-01' },
-    { id: '4', username: 'butcher_bks', password: 'butcher123', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher BKS', createdAt: '2026-01-15' },
-    { id: '5', username: 'admin_bks', password: 'admin123', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin BKS', createdAt: '2026-01-15' },
+    { id: '4', username: 'butcher_bks', password: 'butcher123', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher BKS', linkedAccountId: '5', createdAt: '2026-01-15' },
+    { id: '5', username: 'admin_bks', password: 'admin123', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin BKS', linkedAccountId: '4', createdAt: '2026-01-15' },
+    { id: '6', username: 'butcher_bdg', password: 'butcher123', role: 'butcher', storeId: '3', storeName: 'TDN BDG', fullName: 'Butcher BDG', linkedAccountId: '7', createdAt: '2026-02-01' },
+    { id: '7', username: 'admin_bdg', password: 'admin123', role: 'admin', storeId: '3', storeName: 'TDN BDG', fullName: 'Admin BDG', linkedAccountId: '6', createdAt: '2026-02-01' },
   ],
   cogsMaster: [
     { id: 'cogs_1', itemCode: 'DF-01', itemName: 'HQ 41/42/44/45 (Daging Fresh)', planName: 'HQ 41/42/44/45', cogsPerKg: 102000, defaultPricePerKg: 125000, sellingPricePerKg: 125000, category: 'DAGING FRESH', updatedAt: '2026-08-01', updatedBy: 'MD Pusat' },
@@ -428,10 +430,49 @@ async function startServer() {
         }
       }
 
-      // Memory Fallback
-      const user = inMemoryStore.users.find(
+      // Memory Fallback with Intelligent Resolver
+      let user = inMemoryStore.users.find(
         (u) => u.username.toLowerCase() === clean || u.username.toLowerCase().replace(/[\s_-]+/g, '') === clean.replace(/[\s_-]+/g, '')
       );
+
+      if (!user) {
+        const isMd = clean.includes('md') || clean.includes('pusat') || clean.includes('merchandis');
+        const isButcher = clean.includes('butcher') || clean.includes('jagal') || clean.includes('potong');
+        const isAdmin = clean.includes('admin') || clean.includes('toko') || clean.includes('spv');
+
+        if (isMd) {
+          user = inMemoryStore.users.find((u) => u.role === 'md') || inMemoryStore.users[2];
+        } else if (isButcher || isAdmin) {
+          const targetRole = isButcher ? 'butcher' : 'admin';
+          const partnerRole = isButcher ? 'admin' : 'butcher';
+          const matchedStore = inMemoryStore.stores.find((s) => {
+            const code = s.code.toLowerCase();
+            const city = s.city.toLowerCase().replace(/[\s_-]+/g, '');
+            const name = s.name.toLowerCase().replace(/[\s_-]+/g, '');
+            return clean.includes(code) || clean.replace(/[\s_-]+/g, '').includes(code) || clean.includes(city) || clean.includes(name);
+          }) || inMemoryStore.stores[0];
+
+          if (matchedStore) {
+            user = inMemoryStore.users.find((u) => u.role === targetRole && (u.storeId === matchedStore.id || (u.storeName && u.storeName.toLowerCase().includes(matchedStore.code.toLowerCase()))));
+            if (!user) {
+              const codeLower = matchedStore.code.toLowerCase();
+              user = {
+                id: `usr_${Date.now()}_${targetRole}`,
+                username: `${targetRole}_${codeLower}`,
+                password: `${targetRole}123`,
+                role: targetRole,
+                fullName: `${targetRole === 'butcher' ? 'Butcher' : 'Admin'} ${matchedStore.name}`,
+                storeId: matchedStore.id,
+                storeName: matchedStore.name,
+                linkedAccountId: `usr_${Date.now()}_${partnerRole}`,
+                createdAt: new Date().toISOString(),
+              };
+              inMemoryStore.users.push(user);
+            }
+          }
+        }
+      }
+
       if (!user) {
         return res.status(401).json({ error: `Akun '${username}' tidak ditemukan di database.` });
       }
@@ -447,6 +488,7 @@ async function startServer() {
           fullName: user.fullName,
           storeId: user.storeId ? user.storeId.toString() : undefined,
           storeName: user.storeName || undefined,
+          linkedAccountId: user.linkedAccountId || undefined,
           createdAt: user.createdAt,
         },
       });
@@ -707,75 +749,124 @@ async function startServer() {
 
   app.post('/api/stores', async (req, res) => {
     try {
-      const { code, name, city } = req.body;
-      const codeUpper = (code || '').toUpperCase().trim();
-      const codeLower = (code || '').toLowerCase().trim();
-      const storeName = (name || '').trim();
-      const storeCity = (city || '').trim();
-      const createdAt = new Date().toISOString().split('T')[0];
+      const incoming = Array.isArray(req.body) ? req.body : [req.body];
+      const savedStores: any[] = [];
 
-      let storeId = '1';
+      for (const item of incoming) {
+        if (!item) continue;
+        const codeUpper = (item.code || '').toUpperCase().trim();
+        const codeLower = (item.code || '').toLowerCase().trim();
+        const storeName = (item.name || `TDN ${codeUpper}`).trim();
+        const storeCity = (item.city || '').trim();
+        const createdAt = item.createdAt || new Date().toISOString().split('T')[0];
 
-      const p = getPool();
-      if (p) {
-        try {
-          const insertRes = await p.query(
-            `INSERT INTO stores (code, name, city, created_at)
-             VALUES ($1, $2, $3, $4)
-             RETURNING id`,
-            [codeUpper, storeName, storeCity, createdAt]
-          );
-          storeId = insertRes.rows[0].id.toString();
+        let storeId = item.id ? item.id.toString() : (codeLower ? `store_${codeLower}` : `${inMemoryStore.stores.length + 1}`);
 
-          // Create Butcher and Admin for this store
-          const intStoreId = parseInt(storeId, 10) || 1;
-          await p.query(
-            `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
-            [`butcher_${codeLower}`, 'butcher123', 'butcher', `Butcher ${codeUpper}`, intStoreId, storeName, createdAt]
-          );
+        const p = getPool();
+        if (p) {
+          try {
+            const insertRes = await p.query(
+              `INSERT INTO stores (code, name, city, created_at)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (code) DO UPDATE SET name = $2, city = $3
+               RETURNING id`,
+              [codeUpper, storeName, storeCity, createdAt]
+            );
+            if (insertRes.rows.length > 0) {
+              storeId = insertRes.rows[0].id.toString();
+            }
 
-          await p.query(
-            `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
-            [`admin_${codeLower}`, 'admin123', 'admin_toko', `Admin ${codeUpper}`, intStoreId, storeName, createdAt]
-          );
-        } catch (dbErr) {
-          console.error('Postgres insert store error:', dbErr);
+            const intStoreId = parseInt(storeId, 10) || 1;
+            await p.query(
+              `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
+              [`butcher_${codeLower}`, item.butcherPassword || 'butcher123', 'butcher', item.butcherName || `Butcher ${codeUpper}`, intStoreId, storeName, createdAt]
+            );
+
+            await p.query(
+              `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
+              [`admin_${codeLower}`, item.adminPassword || 'admin123', 'admin_toko', item.adminName || `Admin ${codeUpper}`, intStoreId, storeName, createdAt]
+            );
+          } catch (dbErr) {
+            console.error('Postgres insert store error:', dbErr);
+          }
         }
-      }
 
-      const newStore = { id: storeId, code: codeUpper, name: storeName, city: storeCity, createdAt };
-      inMemoryStore.stores.push(newStore);
-      
-      const newButcherUser = {
-        id: `usr_${Date.now()}_1`,
-        username: `butcher_${codeLower}`,
-        password: 'butcher123',
-        role: 'butcher',
-        fullName: `Butcher ${codeUpper}`,
-        storeId: storeId,
-        storeName: storeName,
-        createdAt,
-      };
-      const newAdminUser = {
-        id: `usr_${Date.now()}_2`,
-        username: `admin_${codeLower}`,
-        password: 'admin123',
-        role: 'admin_toko',
-        fullName: `Admin ${codeUpper}`,
-        storeId: storeId,
-        storeName: storeName,
-        createdAt,
-      };
-      inMemoryStore.users.push(newButcherUser, newAdminUser);
+        const newStore = { id: storeId, code: codeUpper, name: storeName, city: storeCity, createdAt };
+        const existingStoreIdx = inMemoryStore.stores.findIndex((s) => s.id === storeId || (codeUpper && s.code === codeUpper));
+        if (existingStoreIdx >= 0) {
+          inMemoryStore.stores[existingStoreIdx] = { ...inMemoryStore.stores[existingStoreIdx], ...newStore };
+        } else {
+          inMemoryStore.stores.push(newStore);
+        }
+
+        const butcherUser = {
+          id: `usr_b_${storeId}`,
+          username: `butcher_${codeLower}`,
+          password: item.butcherPassword || 'butcher123',
+          role: 'butcher',
+          fullName: item.butcherName || `Butcher ${codeUpper}`,
+          storeId: storeId,
+          storeName: storeName,
+          linkedAccountId: `usr_a_${storeId}`,
+          createdAt,
+        };
+
+        const adminUser = {
+          id: `usr_a_${storeId}`,
+          username: `admin_${codeLower}`,
+          password: item.adminPassword || 'admin123',
+          role: 'admin',
+          fullName: item.adminName || `Admin ${codeUpper}`,
+          storeId: storeId,
+          storeName: storeName,
+          linkedAccountId: `usr_b_${storeId}`,
+          createdAt,
+        };
+
+        const bIdx = inMemoryStore.users.findIndex((u) => u.username === butcherUser.username);
+        if (bIdx >= 0) inMemoryStore.users[bIdx] = { ...inMemoryStore.users[bIdx], ...butcherUser };
+        else inMemoryStore.users.push(butcherUser);
+
+        const aIdx = inMemoryStore.users.findIndex((u) => u.username === adminUser.username);
+        if (aIdx >= 0) inMemoryStore.users[aIdx] = { ...inMemoryStore.users[aIdx], ...adminUser };
+        else inMemoryStore.users.push(adminUser);
+
+        savedStores.push(newStore);
+      }
 
       syncToSheetsBackend('Toko_Cabang', inMemoryStore.stores);
       syncToSheetsBackend('Pengguna', inMemoryStore.users);
 
-      res.json({ success: true, store: newStore });
+      res.json({ success: true, stores: inMemoryStore.stores, store: savedStores[0] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/users', async (req, res) => {
+    try {
+      const incoming = Array.isArray(req.body) ? req.body : [req.body];
+      incoming.forEach((u: any) => {
+        if (!u || !u.username) return;
+        const cleanUser = u.username.toLowerCase().trim();
+        const idx = inMemoryStore.users.findIndex((item) => item.username.toLowerCase().trim() === cleanUser);
+        const normUser = {
+          ...u,
+          role: normalizeRole(u.role),
+          password: u.password || (normalizeRole(u.role) === 'md' ? 'md123' : `${normalizeRole(u.role)}123`),
+        };
+        if (idx >= 0) {
+          inMemoryStore.users[idx] = { ...inMemoryStore.users[idx], ...normUser };
+        } else {
+          inMemoryStore.users.push(normUser);
+        }
+      });
+      syncToSheetsBackend('Pengguna', inMemoryStore.users);
+      res.json({ success: true, users: inMemoryStore.users });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -970,17 +1061,16 @@ async function startServer() {
           console.error('Postgres save thawing items error:', dbErr);
         }
       }
-      if (Array.isArray(req.body)) {
-        inMemoryStore.thawingItems = req.body;
-      } else {
-        const item = req.body;
+      const incoming = Array.isArray(req.body) ? req.body : [req.body];
+      incoming.forEach((item: any) => {
+        if (!item || !item.id) return;
         const idx = inMemoryStore.thawingItems.findIndex((i) => i.id === item.id);
         if (idx >= 0) {
           inMemoryStore.thawingItems[idx] = { ...inMemoryStore.thawingItems[idx], ...item };
         } else {
           inMemoryStore.thawingItems.unshift(item);
         }
-      }
+      });
       syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
       res.json({ success: true, items: inMemoryStore.thawingItems });
     } catch (err: any) {
@@ -1063,17 +1153,16 @@ async function startServer() {
           console.error('Postgres save segments error:', dbErr);
         }
       }
-      if (Array.isArray(req.body)) {
-        inMemoryStore.fabricationSegments = req.body;
-      } else {
-        const seg = req.body;
+      const incoming = Array.isArray(req.body) ? req.body : [req.body];
+      incoming.forEach((seg: any) => {
+        if (!seg || !seg.id) return;
         const idx = inMemoryStore.fabricationSegments.findIndex((s) => s.id === seg.id);
         if (idx >= 0) {
           inMemoryStore.fabricationSegments[idx] = { ...inMemoryStore.fabricationSegments[idx], ...seg };
         } else {
           inMemoryStore.fabricationSegments.unshift(seg);
         }
-      }
+      });
       syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
@@ -1145,17 +1234,16 @@ async function startServer() {
           console.error('Postgres save adjustments error:', dbErr);
         }
       }
-      if (Array.isArray(req.body)) {
-        inMemoryStore.stockAdjustments = req.body;
-      } else {
-        const a = req.body;
+      const incoming = Array.isArray(req.body) ? req.body : [req.body];
+      incoming.forEach((a: any) => {
+        if (!a || !a.id) return;
         const idx = inMemoryStore.stockAdjustments.findIndex((item) => item.id === a.id);
         if (idx >= 0) {
           inMemoryStore.stockAdjustments[idx] = { ...inMemoryStore.stockAdjustments[idx], ...a };
         } else {
           inMemoryStore.stockAdjustments.unshift(a);
         }
-      }
+      });
       syncToSheetsBackend('Adjustment', inMemoryStore.stockAdjustments);
       res.json({ success: true, adjustments: inMemoryStore.stockAdjustments });
     } catch (err: any) {
@@ -1267,11 +1355,16 @@ async function startServer() {
         if (!r) return;
         const rPlan = (r.planName || '').toLowerCase().trim();
         const rDate = (r.date || '').split('T')[0];
+        const rStore = String(r.storeId || '').toLowerCase().trim();
         const idx = inMemoryStore.closingPlanRecords.findIndex((item: any) => {
           if (r.id && item.id && item.id === r.id) return true;
           const iPlan = (item.planName || '').toLowerCase().trim();
           const iDate = (item.date || '').split('T')[0];
-          return iPlan && rPlan && iPlan === rPlan && (!iDate || !rDate || iDate === rDate);
+          const iStore = String(item.storeId || '').toLowerCase().trim();
+          const storeMatches = !iStore || !rStore || iStore === rStore ||
+            (iStore === '1' && (rStore === 'store_ckr' || rStore === 'ckr')) ||
+            ((iStore === 'store_ckr' || iStore === 'ckr') && rStore === '1');
+          return iPlan && rPlan && iPlan === rPlan && (!iDate || !rDate || iDate === rDate) && storeMatches;
         });
         if (idx >= 0) {
           inMemoryStore.closingPlanRecords[idx] = { ...inMemoryStore.closingPlanRecords[idx], ...r };
@@ -1548,17 +1641,16 @@ async function startServer() {
           console.error('Postgres save reports error:', dbErr);
         }
       }
-      if (Array.isArray(req.body)) {
-        inMemoryStore.dailyClosingReports = req.body;
-      } else {
-        const r = req.body;
+      const incoming = Array.isArray(req.body) ? req.body : [req.body];
+      incoming.forEach((r: any) => {
+        if (!r || !r.id) return;
         const idx = inMemoryStore.dailyClosingReports.findIndex((item) => item.id === r.id);
         if (idx >= 0) {
           inMemoryStore.dailyClosingReports[idx] = { ...inMemoryStore.dailyClosingReports[idx], ...r };
         } else {
           inMemoryStore.dailyClosingReports.unshift(r);
         }
-      }
+      });
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
     } catch (err: any) {
