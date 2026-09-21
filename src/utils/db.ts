@@ -305,14 +305,18 @@ export const getStockAdjustments = (): StockAdjustment[] => {
   return data ? JSON.parse(data) : [];
 };
 
+export const saveStockAdjustmentsLocally = (adjs: StockAdjustment[]) => {
+  safeSetItem('stock_adjustments', JSON.stringify(adjs));
+};
+
 export const saveStockAdjustments = (adjs: StockAdjustment[], updatedSingleAdj?: StockAdjustment) => {
   safeSetItem('stock_adjustments', JSON.stringify(adjs));
   postApiBackground('/api/adjustments', adjs);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleAdj) {
-      upsertRecordToSheets('Koreksi_Stok', updatedSingleAdj);
+      upsertRecordToSheets('Adjustment', updatedSingleAdj);
     } else {
-      updateTableInSheets('Koreksi_Stok', adjs);
+      updateTableInSheets('Adjustment', adjs);
     }
   }
 };
@@ -327,6 +331,10 @@ export const getClosingPlanRecords = (): ClosingPlanRecord[] => {
   } catch {
     return [];
   }
+};
+
+export const saveClosingPlanRecordsLocally = (records: ClosingPlanRecord[]) => {
+  safeSetItem('closing_plan_records', JSON.stringify(records));
 };
 
 export const saveClosingPlanRecords = (records: ClosingPlanRecord[], updatedSingleRecord?: ClosingPlanRecord) => {
@@ -515,22 +523,27 @@ export const getThawingItems = (): ThawingItem[] => {
   }
 };
 
+export const saveThawingItemsLocally = (items: ThawingItem[]) => {
+  const cleanItems = deduplicateThawingItems(items);
+  safeSetItem('thawing_items', JSON.stringify(cleanItems));
+};
+
 export const saveThawingItems = (items: ThawingItem[], updatedSingleItem?: ThawingItem) => {
   const cleanItems = deduplicateThawingItems(items);
   safeSetItem('thawing_items', JSON.stringify(cleanItems));
   postApiBackground('/api/thawing-items', cleanItems);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleItem) {
-      upsertRecordToSheets('Thawing_Daging', updatedSingleItem);
+      upsertRecordToSheets('Data_Thawing', updatedSingleItem);
     } else {
-      updateTableInSheets('Thawing_Daging', cleanItems);
+      updateTableInSheets('Data_Thawing', cleanItems);
     }
   }
 };
 
 export const deleteThawingItemFromCloud = (id: string) => {
   if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Thawing_Daging', id);
+    deleteRecordFromSheets('Data_Thawing', id);
   }
 };
 
@@ -539,14 +552,18 @@ export const getFabricationSegments = (): FabricationSegment[] => {
   return data ? JSON.parse(data) : [];
 };
 
+export const saveFabricationSegmentsLocally = (segments: FabricationSegment[]) => {
+  safeSetItem('fabrication_segments', JSON.stringify(segments));
+};
+
 export const saveFabricationSegments = (segments: FabricationSegment[], updatedSingleSegment?: FabricationSegment) => {
   safeSetItem('fabrication_segments', JSON.stringify(segments));
   postApiBackground('/api/fabrication-segments', segments);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleSegment) {
-      upsertRecordToSheets('Pabrikasi_Segmen', updatedSingleSegment);
+      upsertRecordToSheets('Data_Pabrikasi', updatedSingleSegment);
     } else {
-      updateTableInSheets('Pabrikasi_Segmen', segments);
+      updateTableInSheets('Data_Pabrikasi', segments);
     }
   }
 };
@@ -557,7 +574,7 @@ export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
   safeSetItem('fabrication_segments', JSON.stringify(updated));
   fetch(`/api/fabrication-segments/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Pabrikasi_Segmen', id);
+    deleteRecordFromSheets('Data_Pabrikasi', id);
   }
   return updated;
 };
@@ -565,6 +582,10 @@ export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
 export const getDailyReports = (): DailyClosingReport[] => {
   const data = localStorage.getItem('daily_reports');
   return data ? JSON.parse(data) : [];
+};
+
+export const saveDailyReportsLocally = (reports: DailyClosingReport[]) => {
+  safeSetItem('daily_reports', JSON.stringify(reports));
 };
 
 export const saveDailyReports = (reports: DailyClosingReport[], updatedSingleReport?: DailyClosingReport) => {
