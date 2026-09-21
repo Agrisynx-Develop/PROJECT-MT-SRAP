@@ -6,7 +6,9 @@ import {
   fetchAllDataFromSheets,
   pushAllDataToSheets,
   initialize8Sheets,
-  getLastSyncTime
+  getLastSyncTime,
+  cleanAppsScriptUrl,
+  validateAppsScriptUrl
 } from '../utils/sheetsApi';
 import { resetDatabase } from '../utils/db';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../utils/googleAppsScriptCode';
@@ -51,6 +53,7 @@ export default function GoogleSheetsSetupModal({
     success: boolean;
     message: string;
     spreadsheetName?: string;
+    spreadsheetId?: string;
   } | null>(null);
 
   const [isPulling, setIsPulling] = useState(false);
@@ -77,10 +80,30 @@ export default function GoogleSheetsSetupModal({
   if (!isOpen) return null;
 
   const handleSaveUrl = () => {
-    setGoogleAppsScriptUrl(urlInput);
-    setActionNotice('URL Google Apps Script berhasil disimpan di perangkat ini.');
-    handleTestConnection(urlInput);
-    setTimeout(() => setActionNotice(null), 3000);
+    const raw = urlInput.trim();
+    if (!raw) {
+      setGoogleAppsScriptUrl('');
+      setUrlInput('');
+      setTestResult(null);
+      setActionNotice('URL Google Apps Script telah dikosongkan.');
+      onDataSynced();
+      return;
+    }
+
+    const val = validateAppsScriptUrl(raw);
+    if (!val.isValid) {
+      setTestResult({
+        success: false,
+        message: val.error || 'Format URL tidak valid.'
+      });
+      return;
+    }
+
+    const clean = val.cleanedUrl!;
+    setGoogleAppsScriptUrl(clean);
+    setUrlInput(clean);
+    setActionNotice('✅ URL Google Apps Script disimpan & disinkronkan ke seluruh sistem!');
+    handleTestConnection(clean);
   };
 
   const handleTestConnection = async (testUrlToUse?: string) => {
@@ -88,7 +111,16 @@ export default function GoogleSheetsSetupModal({
     if (!targetUrl) {
       setTestResult({
         success: false,
-        message: 'Masukkan URL Google Apps Script terlebih dahulu.'
+        message: 'Masukkan URL Web App Google Apps Script (harus berakhiran /exec).'
+      });
+      return;
+    }
+
+    const val = validateAppsScriptUrl(targetUrl);
+    if (!val.isValid) {
+      setTestResult({
+        success: false,
+        message: val.error || 'URL tidak valid.'
       });
       return;
     }
@@ -96,8 +128,15 @@ export default function GoogleSheetsSetupModal({
     setIsTesting(true);
     setTestResult(null);
     try {
-      const res = await testAppsScriptConnection(targetUrl);
+      const res = await testAppsScriptConnection(val.cleanedUrl);
       setTestResult(res);
+      if (res.success) {
+        if (res.normalizedUrl) {
+          setUrlInput(res.normalizedUrl);
+        }
+        setActionNotice('✅ Berhasil terhubung ke Google Spreadsheet!');
+        onDataSynced();
+      }
     } catch (err: any) {
       setTestResult({
         success: false,
@@ -105,6 +144,7 @@ export default function GoogleSheetsSetupModal({
       });
     } finally {
       setIsTesting(false);
+      setTimeout(() => setActionNotice(null), 4000);
     }
   };
 
