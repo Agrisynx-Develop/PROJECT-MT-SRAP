@@ -60,6 +60,7 @@ export default function GoogleSheetsSetupModal({
   const [hasCopiedUrl, setHasCopiedUrl] = useState(false);
   const [activeTab, setActiveTab] = useState<'status' | 'code' | 'guide'>('status');
   const [lastSync, setLastSync] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -154,8 +155,6 @@ export default function GoogleSheetsSetupModal({
       setTimeout(() => setActionNotice(null), 4000);
     }
   };
-
-  const [isInitializing, setIsInitializing] = useState(false);
 
   const handleInit8Sheets = async () => {
     setIsInitializing(true);
