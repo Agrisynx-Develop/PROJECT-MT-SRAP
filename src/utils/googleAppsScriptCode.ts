@@ -15,7 +15,7 @@
  * 8. Paste the Web App URL into the TDN Meat Tracker Settings / Sync dialog.
  */
 
-export const GOOGLE_APPS_SCRIPT_CODE =  '/**
+export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
  * TDN MEAT TRACKER - 8-SHEET DATABASE ENGINE (GOOGLE APPS SCRIPT)
  * =========================================================================
@@ -945,3 +945,4 @@ function jsonResponse(data) {
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
+`;
