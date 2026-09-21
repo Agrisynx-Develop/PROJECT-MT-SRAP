@@ -22,16 +22,21 @@ import {
   normalizeCogsList,
   getStockAdjustments,
   saveStockAdjustments,
+  saveStockAdjustmentsLocally,
   getClosingPlanRecords,
   saveClosingPlanRecords,
+  saveClosingPlanRecordsLocally,
   deleteClosingPlanRecord,
   purgeDateRecords,
   getThawingItems,
   saveThawingItems,
+  saveThawingItemsLocally,
   getFabricationSegments,
   saveFabricationSegments,
+  saveFabricationSegmentsLocally,
   getDailyReports,
   saveDailyReports,
+  saveDailyReportsLocally,
   deleteDailyReport,
   deleteFabricationSegment,
   getLossConfig,
@@ -41,6 +46,7 @@ import {
   deleteThawingItemFromCloud,
   deduplicateThawingItems,
   deduplicateDailyReports,
+  resolveUserFromInput,
 } from './utils/db';
 import {
   getGoogleAppsScriptUrl,
@@ -123,7 +129,7 @@ export default function App() {
 
   // Account & Store State
   const [stores, setStores] = useState<Store[]>([]);
-  const [selectedStoreIdForMd, setSelectedStoreIdForMd] = useState<string>('store_ckt');
+  const [selectedStoreIdForMd, setSelectedStoreIdForMd] = useState<string>('all');
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [showAccountModal, setShowAccountModal] = useState<boolean>(false);
 
@@ -200,8 +206,15 @@ export default function App() {
           }
           if (d.users && d.users.length > 0) setUsers(d.users);
           if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
-          if (d.thawingItems) setItems(deduplicateThawingItems(d.thawingItems || []));
-          if (d.fabricationSegments) setSegments(d.fabricationSegments || []);
+          if (d.thawingItems) {
+            const cleanThawing = deduplicateThawingItems(d.thawingItems || []);
+            setItems(cleanThawing);
+            saveThawingItemsLocally(cleanThawing);
+          }
+          if (d.fabricationSegments) {
+            setSegments(d.fabricationSegments || []);
+            saveFabricationSegmentsLocally(d.fabricationSegments || []);
+          }
           if (d.closingPlanRecords) {
             const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
             const sanitized: ClosingPlanRecord[] = rawRecords
@@ -271,11 +284,18 @@ export default function App() {
             const filteredMerged = Array.from(recordMap.values());
             setClosingRecords(filteredMerged);
             if (filteredMerged.length > 0) {
-              saveClosingPlanRecords(filteredMerged);
+              saveClosingPlanRecordsLocally(filteredMerged);
             }
           }
-          if (d.dailyClosingReports) setReports(deduplicateDailyReports(d.dailyClosingReports || []));
-          if (d.stockAdjustments) setAdjustments(d.stockAdjustments || []);
+          if (d.dailyClosingReports) {
+            const cleanRep = deduplicateDailyReports(d.dailyClosingReports || []);
+            setReports(cleanRep);
+            saveDailyReportsLocally(cleanRep);
+          }
+          if (d.stockAdjustments) {
+            setAdjustments(d.stockAdjustments || []);
+            saveStockAdjustmentsLocally(d.stockAdjustments || []);
+          }
           if (d.lossConfig) setLossConfig(d.lossConfig);
           setLastCloudSync(new Date().toISOString());
           return;
@@ -359,7 +379,7 @@ export default function App() {
         });
         const merged = deduplicateThawingItems(Array.from(itemMap.values()));
         setItems(merged);
-        saveThawingItems(merged);
+        saveThawingItemsLocally(merged);
       } else {
         setItems(deduplicateThawingItems(getThawingItems()));
       }
@@ -381,7 +401,7 @@ export default function App() {
         });
         const merged = Array.from(segMap.values());
         setSegments(merged);
-        saveFabricationSegments(merged);
+        saveFabricationSegmentsLocally(merged);
       } else {
         setSegments(getFabricationSegments());
       }
@@ -398,7 +418,7 @@ export default function App() {
         });
         const merged = Array.from(adjMap.values());
         setAdjustments(merged);
-        saveStockAdjustments(merged);
+        saveStockAdjustmentsLocally(merged);
       } else {
         setAdjustments(getStockAdjustments());
       }
@@ -459,7 +479,7 @@ export default function App() {
         const filtered = Array.from(recordMap.values());
         setClosingRecords(filtered);
         if (filtered.length > 0) {
-          saveClosingPlanRecords(filtered);
+          saveClosingPlanRecordsLocally(filtered);
         }
       } else {
         setClosingRecords(getClosingPlanRecords());
@@ -477,7 +497,7 @@ export default function App() {
         });
         const merged = deduplicateDailyReports(Array.from(repMap.values()));
         setReports(merged);
-        saveDailyReports(merged);
+        saveDailyReportsLocally(merged);
       } else {
         setReports(deduplicateDailyReports(getDailyReports()));
       }
@@ -526,19 +546,22 @@ export default function App() {
     // 2. Fetch initial data on mount (without touching activeTab)
     fetchAllData(true);
 
-    // 3. Periodic gentle background polling (every 12s if tab is visible) to auto-sync closing and sales across roles
+    // 3. Periodic background polling (every 5s if tab is visible) to auto-sync data across Butcher, Admin, and MD
     const pollInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchAllData(true);
       }
-    }, 12000);
+    }, 5000);
 
-    // 4. Gentle sync on tab return / window focus (NEVER resets activeTab)
+    // 4. Instant sync on tab return / window focus
     const handleFocus = () => {
-      fetchAllData(true);
+      if (document.visibilityState === 'visible') {
+        fetchAllData(true);
+      }
     };
 
     window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
 
     // 5. Cross-tab instant communication via BroadcastChannel
     let bc: BroadcastChannel | null = null;
@@ -617,6 +640,7 @@ export default function App() {
     return () => {
       clearInterval(pollInterval);
       window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
       if (bc) {
         try {
           bc.close();
@@ -661,16 +685,27 @@ export default function App() {
       status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
       thawingStartTime?: string;
       storeId?: string;
+      storeName?: string;
     }
   ) => {
     const now = new Date();
-    const effectiveStoreId = newItem.storeId || currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const resolvedStoreId =
+      newItem.storeId ||
+      (currentStore && currentStore.id !== 'all' ? currentStore.id : undefined) ||
+      currentUser?.storeId ||
+      '1';
+    const resolvedStoreName =
+      newItem.storeName ||
+      (currentStore && currentStore.id !== 'all' ? currentStore.name : undefined) ||
+      currentUser?.storeName ||
+      'TDN CKR';
     const createdAtTime = newItem.createdAt || now.toISOString();
     const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const item: ThawingItem = {
       ...newItem,
       id: itemId,
-      storeId: effectiveStoreId,
+      storeId: resolvedStoreId,
+      storeName: resolvedStoreName,
       status: newItem.status || 'thawing',
       thawingStartTime: newItem.thawingStartTime || createdAtTime,
       createdAt: createdAtTime,
@@ -708,17 +743,26 @@ export default function App() {
     status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
     thawingStartTime?: string;
     storeId?: string;
+    storeName?: string;
   }>) => {
     if (!newItemsList || newItemsList.length === 0) return;
     const now = new Date();
-    const effectiveStoreId = currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const resolvedStoreId =
+      (currentStore && currentStore.id !== 'all' ? currentStore.id : undefined) ||
+      currentUser?.storeId ||
+      '1';
+    const resolvedStoreName =
+      (currentStore && currentStore.id !== 'all' ? currentStore.name : undefined) ||
+      currentUser?.storeName ||
+      'TDN CKR';
     const preparedItems: ThawingItem[] = newItemsList.map((newItem, idx) => {
       const createdAtTime = newItem.createdAt || now.toISOString();
       const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
       return {
         ...newItem,
         id: itemId,
-        storeId: newItem.storeId || effectiveStoreId,
+        storeId: newItem.storeId || resolvedStoreId,
+        storeName: newItem.storeName || resolvedStoreName,
         status: newItem.status || 'thawing',
         thawingStartTime: newItem.thawingStartTime || createdAtTime,
         createdAt: createdAtTime,
@@ -1720,29 +1764,29 @@ export default function App() {
       label: userRole === 'butcher' ? 'Dashboard Bahan' : 'Input & Thawing',
       icon: LayoutDashboard,
       color: 'text-red-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'antrian',
       label: 'Antrian Thawing',
       icon: Clock,
       color: 'text-amber-500',
-      count: storeItems.filter((i) => i.status === 'thawing').length,
-      roles: ['butcher', 'admin'],
+      count: storeItems.filter((i) => !i.status || i.status.toLowerCase() === 'thawing' || i.status.toLowerCase() === 'sedang thawing' || i.status.toLowerCase() === 'antrian').length,
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'segmentasi',
       label: 'Segmentasi Potong',
       icon: Scissors,
       color: 'text-blue-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'sales',
       label: 'Update Sales',
       icon: DollarSign,
       color: 'text-emerald-500',
-      roles: ['admin'],
+      roles: ['admin', 'md'],
     },
     {
       id: 'closing_butcher',
@@ -1822,6 +1866,51 @@ export default function App() {
           )}
         </div>
 
+        {/* Quick Role Switcher (Allows instant testing across Butcher, Admin, and MD) */}
+        <div className="px-3 pb-2">
+          <div className="p-1.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between gap-1 text-[10px]">
+            <button
+              onClick={() => {
+                const u = resolveUserFromInput('butcher_ckr');
+                setCurrentUserState(u);
+                localStorage.setItem('current_logged_user', JSON.stringify(u));
+              }}
+              className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
+                userRole === 'butcher' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Ganti ke Petugas Butcher"
+            >
+              🥩 Butcher
+            </button>
+            <button
+              onClick={() => {
+                const u = resolveUserFromInput('admin_ckr');
+                setCurrentUserState(u);
+                localStorage.setItem('current_logged_user', JSON.stringify(u));
+              }}
+              className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
+                userRole === 'admin' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Ganti ke Admin Toko"
+            >
+              🏢 Admin
+            </button>
+            <button
+              onClick={() => {
+                const u = resolveUserFromInput('md_pusat');
+                setCurrentUserState(u);
+                localStorage.setItem('current_logged_user', JSON.stringify(u));
+              }}
+              className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
+                userRole === 'md' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Ganti ke MD Pusat"
+            >
+              🌐 MD
+            </button>
+          </div>
+        </div>
+
         {/* MD Store Switcher when inspecting store modules */}
         {userRole === 'md' && stores.length > 0 && (
           <div className="px-3 pb-2">
@@ -1835,6 +1924,7 @@ export default function App() {
                 onChange={(e) => setSelectedStoreIdForMd(e.target.value)}
                 className="w-full text-xs font-bold bg-slate-900 border border-slate-700 text-emerald-200 rounded-lg p-1.5 focus:ring-1 focus:ring-emerald-500 focus:outline-none cursor-pointer"
               >
+                <option value="all">🌟 Semua Cabang (Pusat & Seluruh Toko)</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.code} - {s.name}
@@ -2011,6 +2101,49 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Quick Role Switcher Mobile */}
+              <div className="p-1.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between gap-1 text-[10px]">
+                <button
+                  onClick={() => {
+                    const u = resolveUserFromInput('butcher_ckr');
+                    setCurrentUserState(u);
+                    localStorage.setItem('current_logged_user', JSON.stringify(u));
+                  }}
+                  className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
+                    userRole === 'butcher' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Ganti ke Petugas Butcher"
+                >
+                  🥩 Butcher
+                </button>
+                <button
+                  onClick={() => {
+                    const u = resolveUserFromInput('admin_ckr');
+                    setCurrentUserState(u);
+                    localStorage.setItem('current_logged_user', JSON.stringify(u));
+                  }}
+                  className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
+                    userRole === 'admin' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Ganti ke Admin Toko"
+                >
+                  🏢 Admin
+                </button>
+                <button
+                  onClick={() => {
+                    const u = resolveUserFromInput('md_pusat');
+                    setCurrentUserState(u);
+                    localStorage.setItem('current_logged_user', JSON.stringify(u));
+                  }}
+                  className={`flex-1 py-1 px-1 rounded-lg font-bold text-center transition cursor-pointer ${
+                    userRole === 'md' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Ganti ke MD Pusat"
+                >
+                  🌐 MD
+                </button>
+              </div>
+
               {/* MD Store Switcher in Drawer */}
               {userRole === 'md' && stores.length > 0 && (
                 <div className="p-2 rounded-xl bg-slate-800/60 border border-slate-700/60">
@@ -2023,6 +2156,7 @@ export default function App() {
                     onChange={(e) => setSelectedStoreIdForMd(e.target.value)}
                     className="w-full text-xs font-bold bg-slate-900 border border-slate-700 text-emerald-200 rounded-lg p-1.5 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                   >
+                    <option value="all">🌟 Semua Cabang (Pusat & Seluruh Toko)</option>
                     {stores.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.code} - {s.name}
