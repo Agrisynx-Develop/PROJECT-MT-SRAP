@@ -22,16 +22,21 @@ import {
   normalizeCogsList,
   getStockAdjustments,
   saveStockAdjustments,
+  saveStockAdjustmentsLocally,
   getClosingPlanRecords,
   saveClosingPlanRecords,
+  saveClosingPlanRecordsLocally,
   deleteClosingPlanRecord,
   purgeDateRecords,
   getThawingItems,
   saveThawingItems,
+  saveThawingItemsLocally,
   getFabricationSegments,
   saveFabricationSegments,
+  saveFabricationSegmentsLocally,
   getDailyReports,
   saveDailyReports,
+  saveDailyReportsLocally,
   deleteDailyReport,
   deleteFabricationSegment,
   getLossConfig,
@@ -44,6 +49,7 @@ import {
 } from './utils/db';
 import {
   getGoogleAppsScriptUrl,
+  saveGoogleAppsScriptUrl,
   getLastSyncTime,
   upsertRecordToSheets,
   deleteRecordFromSheets,
@@ -51,6 +57,7 @@ import {
   pushAllDataToSheets,
 } from './utils/sheetsApi';
 import { matchStoreEntity, getEffectiveStore, isMatchPlan, getDeterministicClosingRecordId } from './utils/storeHelper';
+import { findHMinus1ClosingRecord, propagateClosingToNextDay, getNextDateStr } from './utils/dateUtils';
 
 // Auth Screen
 import LoginScreen from './components/LoginScreen';
@@ -121,7 +128,7 @@ export default function App() {
 
   // Account & Store State
   const [stores, setStores] = useState<Store[]>([]);
-  const [selectedStoreIdForMd, setSelectedStoreIdForMd] = useState<string>('store_ckt');
+  const [selectedStoreIdForMd, setSelectedStoreIdForMd] = useState<string>('all');
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [showAccountModal, setShowAccountModal] = useState<boolean>(false);
 
@@ -166,13 +173,28 @@ export default function App() {
   const fetchAllData = async (silent = false) => {
     if (!silent) setIsCloudSyncing(true);
     try {
-      const hasSheetsUrl = Boolean(getGoogleAppsScriptUrl());
-      setCloudConnected(hasSheetsUrl);
+      // 0. Auto-sync URL from backend if local storage doesn't have it yet
+      let currentSheetsUrl = getGoogleAppsScriptUrl();
+      if (!currentSheetsUrl) {
+        try {
+          const cfgRes = await fetch('/api/config/sheets-url');
+          if (cfgRes.ok) {
+            const cfg = await cfgRes.json();
+            if (cfg?.url) {
+              currentSheetsUrl = cfg.url;
+              saveGoogleAppsScriptUrl(currentSheetsUrl);
+            }
+          }
+        } catch {}
+      }
+
+      const hasSheetsUrl = Boolean(currentSheetsUrl);
 
       // 1. If Google Apps Script is configured, prioritize pulling directly from Google Spreadsheet
       if (hasSheetsUrl) {
         const sheetsRes = await pullAllDataFromGoogleSheets();
         if (sheetsRes.success && sheetsRes.data) {
+          setCloudConnected(true);
           const d = sheetsRes.data;
           if (d.stores && d.stores.length > 0) {
             setStores(d.stores);
@@ -183,12 +205,18 @@ export default function App() {
           }
           if (d.users && d.users.length > 0) setUsers(d.users);
           if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
-          if (d.thawingItems) setItems(deduplicateThawingItems((d.thawingItems || []).filter((i: any) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29')));
-          if (d.fabricationSegments) setSegments((d.fabricationSegments || []).filter((s: any) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== '2026-08-29'));
+          if (d.thawingItems) {
+            const cleanThawing = deduplicateThawingItems(d.thawingItems || []);
+            setItems(cleanThawing);
+            saveThawingItemsLocally(cleanThawing);
+          }
+          if (d.fabricationSegments) {
+            setSegments(d.fabricationSegments || []);
+            saveFabricationSegmentsLocally(d.fabricationSegments || []);
+          }
           if (d.closingPlanRecords) {
             const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
             const sanitized: ClosingPlanRecord[] = rawRecords
-              .filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29')
               .map((r: any) => ({
                 ...r,
                 openingStockKg: Number(r.openingStockKg) || 0,
@@ -203,9 +231,7 @@ export default function App() {
 
             // Merge with local records if local has newer closed timestamp or non-zero weight
             const local = getClosingPlanRecords();
-            const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
-              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-            );
+            const localList: ClosingPlanRecord[] = Array.isArray(local) ? local : [];
 
             // Robust merge: sheets/cloud base with local updates taking precedence
             const recordMap = new Map<string, ClosingPlanRecord>();
@@ -254,20 +280,30 @@ export default function App() {
               }
             });
 
-            const filteredMerged = Array.from(recordMap.values()).filter(
-              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-            );
+            const filteredMerged = Array.from(recordMap.values());
             setClosingRecords(filteredMerged);
             if (filteredMerged.length > 0) {
-              saveClosingPlanRecords(filteredMerged);
+              saveClosingPlanRecordsLocally(filteredMerged);
             }
           }
-          if (d.dailyClosingReports) setReports(deduplicateDailyReports((d.dailyClosingReports || []).filter((r: any) => (r.date || '').split('T')[0] !== '2026-08-29')));
-          if (d.stockAdjustments) setAdjustments((d.stockAdjustments || []).filter((a: any) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'));
+          if (d.dailyClosingReports) {
+            const cleanRep = deduplicateDailyReports(d.dailyClosingReports || []);
+            setReports(cleanRep);
+            saveDailyReportsLocally(cleanRep);
+          }
+          if (d.stockAdjustments) {
+            setAdjustments(d.stockAdjustments || []);
+            saveStockAdjustmentsLocally(d.stockAdjustments || []);
+          }
           if (d.lossConfig) setLossConfig(d.lossConfig);
           setLastCloudSync(new Date().toISOString());
           return;
+        } else {
+          setCloudConnected(false);
+          console.warn('[Cloud Sync] Failed to fetch data from Google Sheets:', sheetsRes.error);
         }
+      } else {
+        setCloudConnected(false);
       }
 
       // 2. Fallback: Fetch from backend API / local cache
@@ -323,21 +359,65 @@ export default function App() {
 
       if (resItems && resItems.ok) {
         const data = await resItems.json();
-        if (Array.isArray(data)) setItems(deduplicateThawingItems(data));
+        const serverList: ThawingItem[] = Array.isArray(data) ? data : [];
+        const localList: ThawingItem[] = getThawingItems();
+        const itemMap = new Map<string, ThawingItem>();
+        serverList.forEach((it) => { if (it && it.id) itemMap.set(it.id, it); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!itemMap.has(loc.id)) {
+            itemMap.set(loc.id, loc);
+          } else {
+            const srv = itemMap.get(loc.id)!;
+            const lTime = new Date(loc.createdAt || loc.thawingStartTime || 0).getTime();
+            const sTime = new Date(srv.createdAt || srv.thawingStartTime || 0).getTime();
+            if (lTime >= sTime || (loc.status === 'pabrikasi_done' && srv.status !== 'pabrikasi_done')) {
+              itemMap.set(loc.id, { ...srv, ...loc });
+            }
+          }
+        });
+        const merged = deduplicateThawingItems(Array.from(itemMap.values()));
+        setItems(merged);
+        saveThawingItemsLocally(merged);
       } else {
         setItems(deduplicateThawingItems(getThawingItems()));
       }
 
       if (resSegs && resSegs.ok) {
         const data = await resSegs.json();
-        if (Array.isArray(data)) setSegments(data);
+        const serverList: FabricationSegment[] = Array.isArray(data) ? data : [];
+        const localList: FabricationSegment[] = getFabricationSegments();
+        const segMap = new Map<string, FabricationSegment>();
+        serverList.forEach((s) => { if (s && s.id) segMap.set(s.id, s); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!segMap.has(loc.id)) {
+            segMap.set(loc.id, loc);
+          } else {
+            const srv = segMap.get(loc.id)!;
+            segMap.set(loc.id, { ...srv, ...loc });
+          }
+        });
+        const merged = Array.from(segMap.values());
+        setSegments(merged);
+        saveFabricationSegmentsLocally(merged);
       } else {
         setSegments(getFabricationSegments());
       }
 
       if (resAdjs && resAdjs.ok) {
         const data = await resAdjs.json();
-        if (Array.isArray(data)) setAdjustments(data);
+        const serverList: StockAdjustment[] = Array.isArray(data) ? data : [];
+        const localList: StockAdjustment[] = getStockAdjustments();
+        const adjMap = new Map<string, StockAdjustment>();
+        serverList.forEach((a) => { if (a && a.id) adjMap.set(a.id, a); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!adjMap.has(loc.id)) adjMap.set(loc.id, loc);
+        });
+        const merged = Array.from(adjMap.values());
+        setAdjustments(merged);
+        saveStockAdjustmentsLocally(merged);
       } else {
         setAdjustments(getStockAdjustments());
       }
@@ -345,12 +425,8 @@ export default function App() {
       if (resRecords && resRecords.ok) {
         const data = await resRecords.json();
         const local = getClosingPlanRecords();
-        const serverList: ClosingPlanRecord[] = (Array.isArray(data) ? data : []).filter(
-          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
-        const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
-          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
+        const serverList: ClosingPlanRecord[] = Array.isArray(data) ? data : [];
+        const localList: ClosingPlanRecord[] = Array.isArray(local) ? local : [];
 
         // Robust merge: server base with local updates taking priority
         const recordMap = new Map<string, ClosingPlanRecord>();
@@ -399,12 +475,10 @@ export default function App() {
           }
         });
 
-        const filtered = Array.from(recordMap.values()).filter(
-          (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
+        const filtered = Array.from(recordMap.values());
         setClosingRecords(filtered);
         if (filtered.length > 0) {
-          saveClosingPlanRecords(filtered);
+          saveClosingPlanRecordsLocally(filtered);
         }
       } else {
         setClosingRecords(getClosingPlanRecords());
@@ -412,7 +486,17 @@ export default function App() {
 
       if (resReps && resReps.ok) {
         const data = await resReps.json();
-        if (Array.isArray(data)) setReports(deduplicateDailyReports(data));
+        const serverList: DailyClosingReport[] = Array.isArray(data) ? data : [];
+        const localList: DailyClosingReport[] = getDailyReports();
+        const repMap = new Map<string, DailyClosingReport>();
+        serverList.forEach((r) => { if (r && r.id) repMap.set(r.id, r); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!repMap.has(loc.id)) repMap.set(loc.id, loc);
+        });
+        const merged = deduplicateDailyReports(Array.from(repMap.values()));
+        setReports(merged);
+        saveDailyReportsLocally(merged);
       } else {
         setReports(deduplicateDailyReports(getDailyReports()));
       }
@@ -461,19 +545,22 @@ export default function App() {
     // 2. Fetch initial data on mount (without touching activeTab)
     fetchAllData(true);
 
-    // 3. Periodic gentle background polling (every 12s if tab is visible) to auto-sync closing and sales across roles
+    // 3. Periodic background polling (every 5s if tab is visible) to auto-sync data across Butcher, Admin, and MD
     const pollInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchAllData(true);
       }
-    }, 12000);
+    }, 5000);
 
-    // 4. Gentle sync on tab return / window focus (NEVER resets activeTab)
+    // 4. Instant sync on tab return / window focus
     const handleFocus = () => {
-      fetchAllData(true);
+      if (document.visibilityState === 'visible') {
+        fetchAllData(true);
+      }
     };
 
     window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
 
     // 5. Cross-tab instant communication via BroadcastChannel
     let bc: BroadcastChannel | null = null;
@@ -481,8 +568,9 @@ export default function App() {
       try {
         bc = new BroadcastChannel('tdn_meat_tracker_channel');
         bc.onmessage = (event) => {
-          if (event.data?.type === 'CLOSING_RECORD_SAVED' && event.data.record) {
-            const incoming: ClosingPlanRecord = event.data.record;
+          const { type, record, item, segments: inSegs, adjustment, report } = event.data || {};
+          if (type === 'CLOSING_RECORD_SAVED' && record) {
+            const incoming: ClosingPlanRecord = record;
             setClosingRecords((prev) => {
               const existingIdx = prev.findIndex(
                 (r) =>
@@ -498,6 +586,49 @@ export default function App() {
               }
               return [incoming, ...prev];
             });
+          } else if (type === 'THAWING_ITEM_SAVED' && item) {
+            setItems((prev) => {
+              const existingIdx = prev.findIndex((i) => i.id === item.id);
+              if (existingIdx >= 0) {
+                const next = [...prev];
+                next[existingIdx] = { ...next[existingIdx], ...item };
+                return next;
+              }
+              return [item, ...prev];
+            });
+          } else if (type === 'FABRICATION_SEGMENTS_SAVED') {
+            if (Array.isArray(inSegs)) {
+              setSegments((prev) => {
+                const map = new Map(prev.map((s) => [s.id, s]));
+                inSegs.forEach((s) => map.set(s.id, s));
+                return Array.from(map.values());
+              });
+            }
+            if (item) {
+              setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...item } : i)));
+            }
+          } else if (type === 'ADJUSTMENT_SAVED' && adjustment) {
+            setAdjustments((prev) => {
+              const idx = prev.findIndex((a) => a.id === adjustment.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = adjustment;
+                return next;
+              }
+              return [adjustment, ...prev];
+            });
+          } else if (type === 'REPORT_SAVED' && report) {
+            setReports((prev) => {
+              const idx = prev.findIndex((r) => r.id === report.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = report;
+                return next;
+              }
+              return [report, ...prev];
+            });
+          } else if (type === 'DATA_REFRESH_REQUESTED') {
+            fetchAllData(true);
           }
         };
       } catch (e) {
@@ -508,6 +639,7 @@ export default function App() {
     return () => {
       clearInterval(pollInterval);
       window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
       if (bc) {
         try {
           bc.close();
@@ -524,6 +656,7 @@ export default function App() {
     const userObj = { ...user, role: roleNorm };
     setCurrentUserState(userObj);
     setCurrentUser(userObj);
+    fetchAllData(true);
     if (roleNorm === 'md') {
       setActiveTab('md');
     } else if (roleNorm === 'admin') {
@@ -551,16 +684,27 @@ export default function App() {
       status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
       thawingStartTime?: string;
       storeId?: string;
+      storeName?: string;
     }
   ) => {
     const now = new Date();
-    const effectiveStoreId = newItem.storeId || currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const resolvedStoreId =
+      newItem.storeId ||
+      (currentStore && currentStore.id !== 'all' ? currentStore.id : undefined) ||
+      currentUser?.storeId ||
+      '1';
+    const resolvedStoreName =
+      newItem.storeName ||
+      (currentStore && currentStore.id !== 'all' ? currentStore.name : undefined) ||
+      currentUser?.storeName ||
+      'TDN CKR';
     const createdAtTime = newItem.createdAt || now.toISOString();
     const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const item: ThawingItem = {
       ...newItem,
       id: itemId,
-      storeId: effectiveStoreId,
+      storeId: resolvedStoreId,
+      storeName: resolvedStoreName,
       status: newItem.status || 'thawing',
       thawingStartTime: newItem.thawingStartTime || createdAtTime,
       createdAt: createdAtTime,
@@ -579,6 +723,16 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     }).catch(console.error);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const chan = new BroadcastChannel('tdn_meat_tracker_channel');
+        chan.postMessage({ type: 'THAWING_ITEM_SAVED', item });
+        chan.close();
+      } catch {
+        // ignore
+      }
+    }
   };
 
   // Handler: Batch Add Items (guarantees multiple items are added without closure overwrite)
@@ -588,17 +742,26 @@ export default function App() {
     status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
     thawingStartTime?: string;
     storeId?: string;
+    storeName?: string;
   }>) => {
     if (!newItemsList || newItemsList.length === 0) return;
     const now = new Date();
-    const effectiveStoreId = currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const resolvedStoreId =
+      (currentStore && currentStore.id !== 'all' ? currentStore.id : undefined) ||
+      currentUser?.storeId ||
+      '1';
+    const resolvedStoreName =
+      (currentStore && currentStore.id !== 'all' ? currentStore.name : undefined) ||
+      currentUser?.storeName ||
+      'TDN CKR';
     const preparedItems: ThawingItem[] = newItemsList.map((newItem, idx) => {
       const createdAtTime = newItem.createdAt || now.toISOString();
       const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
       return {
         ...newItem,
         id: itemId,
-        storeId: newItem.storeId || effectiveStoreId,
+        storeId: newItem.storeId || resolvedStoreId,
+        storeName: newItem.storeName || resolvedStoreName,
         status: newItem.status || 'thawing',
         thawingStartTime: newItem.thawingStartTime || createdAtTime,
         createdAt: createdAtTime,
@@ -705,7 +868,7 @@ export default function App() {
       salesKg: 0,
       plannedFabrication: planName,
       openingPurpose: purpose,
-      storeId: currentUser?.storeId || 'store_ckr',
+      storeId: parentItem?.storeId || currentStore?.id || currentUser?.storeId || '1',
       createdAt: new Date().toISOString(),
     }));
 
@@ -737,6 +900,16 @@ export default function App() {
     const updatedParent = updatedItems.find((i) => i.id === itemId);
     if (updatedParent) {
       upsertRecordToSheets('thawing_items', updatedParent);
+    }
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const chan = new BroadcastChannel('tdn_meat_tracker_channel');
+        chan.postMessage({ type: 'FABRICATION_SEGMENTS_SAVED', segments: createdSegments, item: updatedParent });
+        chan.close();
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -1073,10 +1246,29 @@ export default function App() {
   const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string; timestamp?: string }) => {
     const cleanDate = (record.date || '').split('T')[0] || new Date().toISOString().split('T')[0];
     const recId = record.id || getDeterministicClosingRecordId(record.storeId, record.planName, cleanDate);
+
+    // Business Logic: Data H-1 hari inilah yang baru terhitung menjadi sisa kemarin / stock awal tanggal ini
+    let finalOpeningKg = typeof record.openingStockKg === 'number' ? record.openingStockKg : 0;
+    if (finalOpeningKg === 0) {
+      const h1Rec = findHMinus1ClosingRecord(closingRecords, { id: record.storeId }, record.planName, cleanDate);
+      if (h1Rec && typeof h1Rec.actualClosingStockKg === 'number') {
+        finalOpeningKg = h1Rec.actualClosingStockKg;
+      }
+    }
+
+    const totalTersedia = finalOpeningKg + (record.newProcessedKg || 0) + (record.adjustInKg || 0) - (record.adjustOutKg || 0);
+    const closingBySystem = Math.max(0, totalTersedia - (record.salesKg || 0));
+    const susutJual = typeof record.actualClosingStockKg === 'number'
+      ? Math.max(0, closingBySystem - record.actualClosingStockKg)
+      : (record.susutJualKg || 0);
+
     const newRec: ClosingPlanRecord = {
       ...record,
       id: recId,
       date: cleanDate,
+      openingStockKg: parseFloat(finalOpeningKg.toFixed(3)),
+      closingStockBySystemKg: parseFloat(closingBySystem.toFixed(3)),
+      susutJualKg: parseFloat(susutJual.toFixed(3)),
       timestamp: record.timestamp || (cleanDate ? `${cleanDate}T17:00:00.000Z` : new Date().toISOString()),
     };
     
@@ -1095,6 +1287,10 @@ export default function App() {
       } else {
         updated = [newRec, ...prev];
       }
+
+      // Propagate: Data closing hari ini langsung menjadi sisa kemarin (stok awal) untuk H+1 (hari esok) jika record H+1 sudah ada
+      updated = propagateClosingToNextDay(newRec, updated);
+
       saveClosingPlanRecords(updated, newRec);
       return updated;
     });
@@ -1289,7 +1485,34 @@ export default function App() {
   };
 
   const handleDeleteClosingRecord = (id: string) => {
-    const updated = closingRecords.filter((r) => r.id !== id);
+    const deletedRec = closingRecords.find((r) => r.id === id);
+    let updated = closingRecords.filter((r) => r.id !== id);
+
+    if (deletedRec) {
+      const cleanDate = (deletedRec.date || deletedRec.timestamp || '').split('T')[0];
+      const nextDate = getNextDateStr(cleanDate);
+      // Jika H-1 dihapus, maka sisa kemarin untuk H+1 kembali menjadi 0 (terisolasi harian)
+      updated = updated.map((r) => {
+        const rDate = (r.date || r.timestamp || '').split('T')[0];
+        if (
+          rDate === nextDate &&
+          matchStoreEntity(r.storeId, { id: deletedRec.storeId }) &&
+          isMatchPlan(r.planName, deletedRec.planName)
+        ) {
+          const totalTersedia = (r.newProcessedKg || 0) + (r.adjustInKg || 0) - (r.adjustOutKg || 0);
+          const closingStockBySystemKg = Math.max(0, totalTersedia - (r.salesKg || 0));
+          const susutJualKg = Math.max(0, closingStockBySystemKg - (r.actualClosingStockKg || 0));
+          return {
+            ...r,
+            openingStockKg: 0,
+            closingStockBySystemKg: parseFloat(closingStockBySystemKg.toFixed(3)),
+            susutJualKg: parseFloat(susutJualKg.toFixed(3)),
+          };
+        }
+        return r;
+      });
+    }
+
     setClosingRecords(updated);
     saveClosingPlanRecords(updated);
     deleteClosingPlanRecord(id);
@@ -1540,29 +1763,29 @@ export default function App() {
       label: userRole === 'butcher' ? 'Dashboard Bahan' : 'Input & Thawing',
       icon: LayoutDashboard,
       color: 'text-red-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'antrian',
       label: 'Antrian Thawing',
       icon: Clock,
       color: 'text-amber-500',
-      count: storeItems.filter((i) => i.status === 'thawing').length,
-      roles: ['butcher', 'admin'],
+      count: storeItems.filter((i) => !i.status || i.status.toLowerCase() === 'thawing' || i.status.toLowerCase() === 'sedang thawing' || i.status.toLowerCase() === 'antrian').length,
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'segmentasi',
       label: 'Segmentasi Potong',
       icon: Scissors,
       color: 'text-blue-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'sales',
       label: 'Update Sales',
       icon: DollarSign,
       color: 'text-emerald-500',
-      roles: ['admin'],
+      roles: ['admin', 'md'],
     },
     {
       id: 'closing_butcher',
@@ -1655,6 +1878,7 @@ export default function App() {
                 onChange={(e) => setSelectedStoreIdForMd(e.target.value)}
                 className="w-full text-xs font-bold bg-slate-900 border border-slate-700 text-emerald-200 rounded-lg p-1.5 focus:ring-1 focus:ring-emerald-500 focus:outline-none cursor-pointer"
               >
+                <option value="all">🌟 Semua Cabang (Pusat & Seluruh Toko)</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.code} - {s.name}
@@ -1843,6 +2067,7 @@ export default function App() {
                     onChange={(e) => setSelectedStoreIdForMd(e.target.value)}
                     className="w-full text-xs font-bold bg-slate-900 border border-slate-700 text-emerald-200 rounded-lg p-1.5 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                   >
+                    <option value="all">🌟 Semua Cabang (Pusat & Seluruh Toko)</option>
                     {stores.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.code} - {s.name}

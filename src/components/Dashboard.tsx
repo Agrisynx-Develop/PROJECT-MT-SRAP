@@ -66,13 +66,14 @@ interface DashboardProps {
 // Default template list matching user requested items
 const COMMON_MEATS = [
   { name: 'HQ 41/42/44/45', category: 'DAGING FRESH', plan: 'DAGING RENDANG PREMIUM', icon: '🥩' },
+  { name: 'FQ SHANK', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
+  { name: 'FQ 60 /SHANK', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
   { name: 'DG RNDG BEKU 1kg', category: 'DAGING FRESH', plan: 'RENDANG POT FRESH', icon: '🥩' },
   { name: 'DAGING KHUSUS', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
   { name: 'DG Prem 2', category: 'DAGING PREMIUM', plan: 'DAGING RENDANG PREMIUM', icon: '🍖' },
   { name: 'FRIBOY', category: 'DAGING PREMIUM', plan: 'DAGING RENDANG PREMIUM', icon: '🍖' },
   { name: 'FQ 106/105/18/16', category: 'RAWON FRESH', plan: 'RAWON', icon: '🥘' },
   { name: 'RAWON FRESH 2', category: 'RAWON FRESH', plan: 'RAWON', icon: '🥘' },
-  { name: 'FQ 60 /SHANK', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
 ];
 
 export default function Dashboard({
@@ -261,6 +262,9 @@ export default function Dashboard({
   const applyTemplate = (meat: { name: string; category: string; plan: string }) => {
     setName(meat.name);
     setCategory(meat.category);
+    if (meat.plan) {
+      setPlan(meat.plan);
+    }
   };
 
   // Image upload handler with High-Resolution processing
@@ -298,21 +302,30 @@ export default function Dashboard({
       return;
     }
 
+    const resolvedPlan =
+      plan ||
+      (name.toUpperCase().includes('SHANK')
+        ? 'RENDANG SHANKLE'
+        : name.toUpperCase().includes('RAWON')
+        ? 'RAWON'
+        : 'DAGING RENDANG PREMIUM');
+
     onAddItem({
       name: name.trim(),
       pabrikasiCategory: category,
       weightBeforeThawing: weight,
       weightAfterThawing: weight,
       susutJualKg: 0,
-      plannedFabrication: 'PENDING',
+      plannedFabrication: resolvedPlan,
       openingPurpose: 'UNTUK DISPLAY',
-      image: 'placeholder',
+      image: image || 'placeholder',
     });
 
     // Reset Form
     setName('');
     setCategory('DAGING FRESH');
     setWeightBefore('');
+    setImage('');
     setErrorMsg('');
     setSuccessMsg('Bahan berhasil dimasukkan ke daftar Thawing!');
     setTimeout(() => setSuccessMsg(''), 3000);
