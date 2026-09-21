@@ -44,6 +44,7 @@ import {
 } from './utils/db';
 import {
   getGoogleAppsScriptUrl,
+  saveGoogleAppsScriptUrl,
   getLastSyncTime,
   upsertRecordToSheets,
   deleteRecordFromSheets,
@@ -167,13 +168,28 @@ export default function App() {
   const fetchAllData = async (silent = false) => {
     if (!silent) setIsCloudSyncing(true);
     try {
-      const hasSheetsUrl = Boolean(getGoogleAppsScriptUrl());
-      setCloudConnected(hasSheetsUrl);
+      // 0. Auto-sync URL from backend if local storage doesn't have it yet
+      let currentSheetsUrl = getGoogleAppsScriptUrl();
+      if (!currentSheetsUrl) {
+        try {
+          const cfgRes = await fetch('/api/config/sheets-url');
+          if (cfgRes.ok) {
+            const cfg = await cfgRes.json();
+            if (cfg?.url) {
+              currentSheetsUrl = cfg.url;
+              saveGoogleAppsScriptUrl(currentSheetsUrl);
+            }
+          }
+        } catch {}
+      }
+
+      const hasSheetsUrl = Boolean(currentSheetsUrl);
 
       // 1. If Google Apps Script is configured, prioritize pulling directly from Google Spreadsheet
       if (hasSheetsUrl) {
         const sheetsRes = await pullAllDataFromGoogleSheets();
         if (sheetsRes.success && sheetsRes.data) {
+          setCloudConnected(true);
           const d = sheetsRes.data;
           if (d.stores && d.stores.length > 0) {
             setStores(d.stores);
@@ -263,7 +279,12 @@ export default function App() {
           if (d.lossConfig) setLossConfig(d.lossConfig);
           setLastCloudSync(new Date().toISOString());
           return;
+        } else {
+          setCloudConnected(false);
+          console.warn('[Cloud Sync] Failed to fetch data from Google Sheets:', sheetsRes.error);
         }
+      } else {
+        setCloudConnected(false);
       }
 
       // 2. Fallback: Fetch from backend API / local cache
