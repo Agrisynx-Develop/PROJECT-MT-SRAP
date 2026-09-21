@@ -15,7 +15,7 @@
  * 8. Paste the Web App URL into the TDN Meat Tracker Settings / Sync dialog.
  */
 
-export const GOOGLE_APPS_SCRIPT_CODE = `/**
+export const GOOGLE_APPS_SCRIPT_CODE =  '/**
  * =========================================================================
  * TDN MEAT TRACKER - 8-SHEET DATABASE ENGINE (GOOGLE APPS SCRIPT)
  * =========================================================================
@@ -52,9 +52,9 @@ var CANONICAL_SHEETS = [
 ];
 
 var TABLE_SCHEMAS = {
-  'Data_Thawing': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
-  'Data_Pabrikasi': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
-  'Closing_Rencana_Potong': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
+  'Data_Thawing': ['id', 'id toko', 'nama toko', 'nama bahan', 'kategori', 'rencana pabrikasi', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status', 'waktu mulai', 'petugas butcher'],
+  'Data_Pabrikasi': ['id', 'id item', 'id toko', 'nama toko', 'nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi', 'susut pabrikasi', 'foto'],
+  'Closing_Rencana_Potong': ['tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
   'Pengguna': ['id', 'user name', 'role', 'full name', 'store id', 'store name', 'created at'],
   'Toko_Cabang': ['id', 'code', 'name', 'city', 'created at'],
   'Master_COGS': ['id', 'item code', 'item name', 'plan name', 'cogs per kg', 'selling price', 'kategori', 'updated at', 'updated by'],
@@ -283,6 +283,56 @@ function doPost(e) {
 
     var action = payload.action || (e && e.parameter && e.parameter.action) || 'updateTable';
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // 0. PING Test (POST support)
+    if (action === 'ping') {
+      return jsonResponse({
+        status: 'ONLINE',
+        message: 'TDN Google Apps Script 8-Sheet Database is active & reachable',
+        spreadsheetId: ss.getId(),
+        spreadsheetName: ss.getName(),
+        sheets: CANONICAL_SHEETS,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 0.1 GET ALL DATA (POST support)
+    if (action === 'getAllData') {
+      setupAndClean8Sheets(ss, false);
+      var allData = {
+        stores: readTableData(ss, 'Toko_Cabang'),
+        users: readTableData(ss, 'Pengguna'),
+        cogsMaster: readTableData(ss, 'Master_COGS'),
+        thawingItems: readTableData(ss, 'Data_Thawing'),
+        fabricationSegments: readTableData(ss, 'Data_Pabrikasi'),
+        closingPlanRecords: readTableData(ss, 'Closing_Rencana_Potong'),
+        stockAdjustments: readTableData(ss, 'Adjustment'),
+        dataSusut: readTableData(ss, 'Data_Susut')
+      };
+      return jsonResponse({
+        success: true,
+        action: 'getAllData',
+        data: allData,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 0.2 GET SINGLE TABLE (POST support)
+    if (action === 'getTable') {
+      var rawTable = payload.table || (e && e.parameter && e.parameter.table);
+      if (!rawTable) {
+        return jsonResponse({ success: false, error: 'Parameter "table" is required' });
+      }
+      var targetTable = resolveGASSheetName(rawTable);
+      var tableItems = readTableData(ss, targetTable);
+      return jsonResponse({
+        success: true,
+        table: targetTable,
+        items: tableItems,
+        count: tableItems.length,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // 1. INIT / FORMAT 8 SHEETS
     if (action === 'init8Sheets') {
@@ -564,6 +614,27 @@ function readTableData(ss, sheetName) {
     if (item['rencana potong']) { item.planName = item['rencana potong']; item.meatName = item['rencana potong']; }
     if (item['berat'] !== undefined) { item.weightKg = Number(item['berat']) || 0; }
     if (item['alasan']) { item.reason = item['alasan']; }
+    if (item['waktu mulai']) { item.thawingStartTime = item['waktu mulai']; }
+    if (item['petugas butcher']) { item.butcherName = item['petugas butcher']; }
+    if (item['id item']) { item.itemId = String(item['id item']); }
+    if (item['susut pabrikasi'] !== undefined) { item.periodicShrinkage = Number(item['susut pabrikasi']) || 0; }
+
+    // Deterministic fallback ID if not provided by older sheet schema
+    if (!item.id || item.id === '') {
+      if (sheetName === 'Data_Thawing') {
+        var d = item.date || item.createdAt || 'nodate';
+        var n = (item.name || 'meat').replace(/[^a-zA-Z0-9]/g, '');
+        var w = item.weightBeforeThawing || 0;
+        var s = item.storeId || '1';
+        item.id = 'thaw_' + s + '_' + n + '_' + d + '_' + Math.round(w * 100);
+      } else if (sheetName === 'Data_Pabrikasi') {
+        var d = item.date || item.createdAt || 'nodate';
+        var n = (item.name || 'seg').replace(/[^a-zA-Z0-9]/g, '');
+        var seg = (item.segmentName || '').replace(/[^a-zA-Z0-9]/g, '');
+        var s = item.storeId || '1';
+        item.id = 'seg_' + s + '_' + n + '_' + seg + '_' + d;
+      }
+    }
 
     rows.push(item);
   }
@@ -598,6 +669,7 @@ function getRecordValueForHeaderGAS(record, header) {
     'susutjual': record.susutJualKg !== undefined ? record.susutJualKg : (record.susutJual || 0),
     'catatan': record.note || record.catatan || '-',
     'id': record.id ? String(record.id) : '',
+    'iditem': record.itemId ? String(record.itemId) : (record.id_item ? String(record.id_item) : ''),
     'username': record.username || record.userName || '',
     'role': record.role || '',
     'fullname': record.fullName || record.full_name || '',
@@ -619,7 +691,10 @@ function getRecordValueForHeaderGAS(record, header) {
     'jenis': record.type || record.jenis || 'IN',
     'rencanapotong': record.planName || record.rencanaPotong || record.meatName || '',
     'berat': record.weightKg !== undefined ? record.weightKg : (record.berat || 0),
-    'alasan': record.reason || record.alasan || '-'
+    'alasan': record.reason || record.alasan || '-',
+    'waktumulai': record.thawingStartTime || record.waktuMulai || '',
+    'petugasbutcher': record.butcherName || record.petugasButcher || '',
+    'susutpabrikasi': record.periodicShrinkage !== undefined ? record.periodicShrinkage : (record.susutPabrikasi || 0)
   };
   return map[norm] !== undefined ? map[norm] : (record[header] !== undefined ? record[header] : '');
 }
@@ -870,4 +945,3 @@ function jsonResponse(data) {
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
-`;
