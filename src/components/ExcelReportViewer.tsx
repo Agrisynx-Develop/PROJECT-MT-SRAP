@@ -301,13 +301,13 @@ export default function ExcelReportViewer({
     (items || []).forEach((i) => {
       if (!i.storeId || matchStoreEntity(i.storeId, currentStore)) {
         const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-        if (d) datesSet.add(d);
+        if (d && d !== '2026-08-29') datesSet.add(d);
       }
     });
     (closingRecords || []).forEach((c) => {
       if (!c.storeId || matchStoreEntity(c.storeId, currentStore)) {
         const d = (c.date || c.timestamp || '').split('T')[0];
-        if (d) datesSet.add(d);
+        if (d && d !== '2026-08-29') datesSet.add(d);
       }
     });
     return Array.from(datesSet).sort().reverse();

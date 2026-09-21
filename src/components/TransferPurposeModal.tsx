@@ -22,6 +22,8 @@ export default function TransferPurposeModal({
   segments,
   onTransferPurpose,
 }: TransferPurposeModalProps) {
+  if (!isOpen) return null;
+
   const [selectedType, setSelectedType] = useState<'item' | 'segment'>('item');
   const [selectedId, setSelectedId] = useState<string>('');
   const [transferMode, setTransferMode] = useState<'full' | 'partial'>('partial');
@@ -105,8 +107,6 @@ export default function TransferPurposeModal({
       onClose();
     }, 2000);
   };
-
-  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">

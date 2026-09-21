@@ -9,7 +9,6 @@ import {
 } from '../types';
 import { processHighResImage, ensureCloudSafeImage } from '../utils/imageCompressor';
 import { isMatchPlan, getDeterministicClosingRecordId } from '../utils/storeHelper';
-import { getPreviousDateStr, findHMinus1ClosingRecord, getHMinus1ClosingStock } from '../utils/dateUtils';
 import SavedDataViewerModal from './SavedDataViewerModal';
 import {
   CheckSquare,
@@ -184,9 +183,7 @@ export default function ButcherClosingView({
     const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + (a.weightKg || 0), 0);
     const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + (a.weightKg || 0), 0);
 
-    const h1Closing = getHMinus1ClosingStock(records || [], currentStore || { id: currentUser.storeId }, planObj.name, record.date || closingDate);
-    const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) ||
-      (typeof record.openingStockKg === 'number' && record.openingStockKg > 0 ? record.openingStockKg : (h1Closing ?? (record.openingStockKg || 0)));
+    const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) || (typeof record.openingStockKg === 'number' ? record.openingStockKg : 0);
     const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0)) || (typeof record.newProcessedKg === 'number' ? record.newProcessedKg : 0);
     const totalTersedia = openingKg + processedKg + adjIn - adjOut;
     
@@ -269,9 +266,7 @@ export default function ButcherClosingView({
     const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
     const existingRec = getRecordForPlan(selectedPlan.name, closingDate);
-    const h1Closing = getHMinus1ClosingStock(records || [], currentStore || { id: currentUser.storeId }, selectedPlan.name, closingDate);
-    const carryoverKg = carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0);
-    const openingStockKg = carryoverKg || (existingRec && existingRec.openingStockKg !== undefined && existingRec.openingStockKg > 0 ? existingRec.openingStockKg : (h1Closing ?? (existingRec?.openingStockKg || 0)));
+    const openingStockKg = (carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0)) || (existingRec ? (Number(existingRec.openingStockKg) || 0) : 0);
     const newProcessedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0)) || (existingRec ? (Number(existingRec.newProcessedKg) || 0) : 0);
     const itemSales = todayPlanItems.concat(carryoverPlanItems).reduce((sum, i) => sum + (i.salesKg || 0), 0);
     const calculatedSales = Math.max(segmentSales, itemSales, (existingRec ? (Number(existingRec.salesKg) || 0) : 0));
@@ -550,9 +545,7 @@ export default function ButcherClosingView({
           const adjIn = planAdj.filter((a) => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
           const adjOut = planAdj.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
 
-          const h1Closing = getHMinus1ClosingStock(records || [], currentStore || { id: currentUser.storeId }, plan.name, closingDate);
-          const carryoverKg = carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0);
-          const openingKg = carryoverKg || (existingRec && existingRec.openingStockKg !== undefined && existingRec.openingStockKg > 0 ? existingRec.openingStockKg : (h1Closing ?? (existingRec?.openingStockKg || 0)));
+          const openingKg = (carryoverPlanItems.reduce((sum, i) => sum + (i.weightBeforeThawing || 0), 0)) || (existingRec ? (Number(existingRec.openingStockKg) || 0) : 0);
           const processedKg = (todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing || 0), 0)) || (existingRec ? (Number(existingRec.newProcessedKg) || 0) : 0);
           const totalTersedia = openingKg + processedKg + adjIn - adjOut;
 
@@ -842,10 +835,7 @@ export default function ButcherClosingView({
                 const selectedPlanSegments = segments.filter(s => (s.plannedFabrication || '').toLowerCase().includes(safeSelName));
                 const selectedPlanAdj = adjustments.filter(a => (a.planName || '').toLowerCase().includes(safeSelName));
 
-                const modalPrevDate = getPreviousDateStr(closingDate);
-                const modalH1Closing = getHMinus1ClosingStock(records || [], currentStore || { id: currentUser.storeId }, selectedPlan.name, closingDate);
-                const modalCarryoverKg = selectedPlanCarryoverItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0);
-                const modalOpening = modalCarryoverKg || (modalH1Closing ?? 0);
+                const modalOpening = selectedPlanCarryoverItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0);
                 const modalProcessed = selectedPlanTodayItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0);
                 const modalAdjIn = selectedPlanAdj.filter(a => a.type === 'IN').reduce((sum, a) => sum + a.weightKg, 0);
                 const modalAdjOut = selectedPlanAdj.filter(a => a.type === 'OUT').reduce((sum, a) => sum + a.weightKg, 0);
@@ -858,42 +848,23 @@ export default function ButcherClosingView({
                 const modalLiveSusut = physicalWeight ? Math.max(0, modalStokSistem - modalInputWeight) : 0;
 
                 return (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5 text-xs">
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 text-xs">
                     <div className="flex items-center justify-between font-bold text-slate-800 border-b border-slate-200 pb-1.5">
                       <span>Perhitungan Stok Sistem:</span>
                       <span className="text-blue-900 font-mono font-black">{modalStokSistem.toFixed(3)} Kg</span>
                     </div>
-
-                    {/* H-1 Source Status Banner */}
-                    <div className={`text-[11px] px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5 ${
-                      modalH1Closing !== null
-                        ? 'bg-emerald-50 text-emerald-900 border-emerald-300 font-semibold'
-                        : 'bg-slate-100 text-slate-600 border-slate-300'
-                    }`}>
-                      <Info className="w-3.5 h-3.5 shrink-0" />
-                      <span>
-                        {modalH1Closing !== null
-                          ? `✓ Sisa kemarin terhitung otomatis dari closing H-1 (${modalPrevDate}): ${modalH1Closing.toFixed(3)} Kg`
-                          : `Data H-1 (${modalPrevDate}) belum ada closing (0.000 Kg). Terisolasi per hari.`}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-600">
-                      <div className="bg-white p-2 rounded-lg border border-slate-200">
-                        <span className="text-slate-400 block text-[10px]">Sisa Kemarin (H-1):</span>
-                        <strong className="text-amber-700 font-mono">{modalOpening.toFixed(3)} Kg</strong>
+                    <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-600">
+                      <div>
+                        <span className="text-slate-400 block">Tersedia:</span>
+                        <strong className="text-slate-700 font-mono">{modalTotalTersedia.toFixed(3)} Kg</strong>
                       </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200">
-                        <span className="text-slate-400 block text-[10px]">Diolah Baru:</span>
-                        <strong className="text-red-700 font-mono">{modalProcessed.toFixed(3)} Kg</strong>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200">
-                        <span className="text-slate-400 block text-[10px]">Total Tersedia:</span>
-                        <strong className="text-slate-800 font-mono">{modalTotalTersedia.toFixed(3)} Kg</strong>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200">
-                        <span className="text-slate-400 block text-[10px]">Sales (Jual):</span>
+                      <div>
+                        <span className="text-slate-400 block">Sales (Jual):</span>
                         <strong className="text-emerald-700 font-mono">{modalSales.toFixed(3)} Kg</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block">Stok Sistem:</span>
+                        <strong className="text-blue-700 font-mono">{modalStokSistem.toFixed(3)} Kg</strong>
                       </div>
                     </div>
 

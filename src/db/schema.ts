@@ -1,7 +1,7 @@
-import { pgTable, text, varchar, real, boolean, integer, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, serial, integer, varchar, real, boolean } from 'drizzle-orm/pg-core';
 
 export const stores = pgTable('stores', {
-  id: text('id').primaryKey(),
+  id: serial('id').primaryKey(),
   code: varchar('code', { length: 50 }).notNull(),
   name: varchar('name', { length: 100 }).notNull(),
   city: varchar('city', { length: 100 }).default(''),
@@ -9,27 +9,23 @@ export const stores = pgTable('stores', {
 });
 
 export const users = pgTable('users', {
-  id: text('id').primaryKey(),
+  id: serial('id').primaryKey(),
   username: varchar('username', { length: 50 }).notNull().unique(),
   password: varchar('password', { length: 255 }).notNull(),
   role: varchar('role', { length: 20 }).notNull(), // 'butcher' | 'admin_toko' | 'admin' | 'md_pusat' | 'md'
   fullName: varchar('full_name', { length: 100 }).notNull(),
-  storeId: text('store_id'),
+  storeId: integer('store_id'),
   storeName: varchar('store_name', { length: 100 }),
   createdAt: text('created_at').default(''),
 });
 
 export const cogsMaster = pgTable('cogs_master', {
   id: text('id').primaryKey(),
-  itemCode: text('item_code'),
-  itemName: text('item_name'),
   planName: text('plan_name').notNull(),
   cogsPerKg: real('cogs_per_kg').notNull(),
-  defaultPricePerKg: real('default_price_per_kg').default(0),
-  sellingPricePerKg: real('selling_price_per_kg').default(0),
+  sellingPricePerKg: real('selling_price_per_kg').notNull(),
   category: text('category').notNull(),
   updatedAt: text('updated_at').notNull(),
-  updatedBy: text('updated_by').default('MD Pusat'),
 });
 
 export const thawingItems = pgTable('thawing_items', {
@@ -90,26 +86,12 @@ export const closingPlanRecords = pgTable('closing_plan_records', {
   storeId: text('store_id').notNull(),
   planName: text('plan_name').notNull(),
   date: text('date').notNull(),
-  category: text('category').default(''),
-  openingStockKg: real('opening_stock_kg').default(0),
-  newProcessedKg: real('new_processed_kg').default(0),
-  salesKg: real('sales_kg').default(0),
-  adjustInKg: real('adjust_in_kg').default(0),
-  adjustOutKg: real('adjust_out_kg').default(0),
-  closingStockBySystemKg: real('closing_stock_by_system_kg').default(0),
-  actualClosingStockKg: real('actual_closing_stock_kg').default(0),
-  susutJualKg: real('susut_jual_kg').default(0),
-  photoUrl: text('photo_url'),
-  photoCaption: text('photo_caption'),
-  note: text('note'),
-  butcherName: text('butcher_name'),
-  timestamp: text('timestamp').notNull(),
-  // Kolom legacy untuk kompatibilitas riwayat lama
-  displayClosingKg: real('display_closing_kg').default(0),
-  pesananClosingKg: real('pesanan_closing_kg').default(0),
-  totalPhysicalClosingKg: real('total_physical_closing_kg').default(0),
+  displayClosingKg: real('display_closing_kg').notNull(),
+  pesananClosingKg: real('pesanan_closing_kg').notNull(),
+  totalPhysicalClosingKg: real('total_physical_closing_kg').notNull(),
   photoDisplayUrl: text('photo_display_url'),
   photoPesananUrl: text('photo_pesanan_url'),
+  timestamp: text('timestamp').notNull(),
 });
 
 export const dailyClosingReports = pgTable('daily_closing_reports', {
@@ -130,18 +112,7 @@ export const dailyClosingReports = pgTable('daily_closing_reports', {
   statusAlert: text('status_alert').notNull(),
   closingPhotoUrl: text('closing_photo_url'),
   butcherName: text('butcher_name').notNull(),
-  reportData: jsonb('report_data'),
   createdAt: text('created_at').notNull(),
-});
-
-export const lossConfig = pgTable('loss_config', {
-  id: text('id').primaryKey(),
-  maxProcessLossPercent: real('max_process_loss_percent').notNull(),
-  maxSalesLossPercent: real('max_sales_loss_percent').notNull(),
-  maxDailyLossPercent: real('max_daily_loss_percent').notNull(),
-  safeThawingLossPercent: real('safe_thawing_loss_percent').notNull(),
-  safeFabricationLossPercent: real('safe_fabrication_loss_percent').notNull(),
-  salesPredictionKg: real('sales_prediction_kg').notNull(),
 });
 
 export const dataSusut = pgTable('data_susut', {

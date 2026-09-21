@@ -24,17 +24,9 @@ export function matchStoreEntity(
   if (sCode && (eId === sCode || eId === `store_${sCode}` || eId.includes(sCode))) return true;
   if (sName && (eId === sName || eId.includes(sName) || sName.includes(eId))) return true;
 
-  // Specific aliases fallback: ckr / store_ckr / 1 / ckt
-  const isCkr = (s: string) => s === '1' || s === 'store_ckr' || s === 'ckr' || s === 'store_ckt' || s === 'ckt' || s.includes('ckr') || s.includes('cikarang');
-  if (isCkr(eId) && (isCkr(sId) || isCkr(sCode) || isCkr(sName))) return true;
-
-  // Specific aliases fallback: bks / store_bks / 2
-  const isBks = (s: string) => s === '2' || s === 'store_bks' || s === 'bks' || s.includes('bekasi');
-  if (isBks(eId) && (isBks(sId) || isBks(sCode) || isBks(sName))) return true;
-
-  // Specific aliases fallback: bdg / store_bdg / 3
-  const isBdg = (s: string) => s === '3' || s === 'store_bdg' || s === 'bdg' || s.includes('bandung');
-  if (isBdg(eId) && (isBdg(sId) || isBdg(sCode) || isBdg(sName))) return true;
+  // Specific aliases fallback: ckr <-> ckt backwards compatibility
+  if ((eId === 'store_ckr' || eId === 'ckr') && (sCode === 'ckr' || sId === '1')) return true;
+  if ((eId === 'store_ckt' || eId === 'ckt') && (sCode === 'ckt' || sCode === 'ckr' || sId === '1')) return true;
 
   return false;
 }
@@ -59,15 +51,6 @@ export function getEffectiveStore(
   }
 
   if (userRole === 'md') {
-    if (selectedStoreIdForMd === 'all' || selectedStoreIdForMd === 'all_stores') {
-      return {
-        id: 'all',
-        code: 'ALL',
-        name: 'Semua Cabang',
-        city: 'Seluruh Toko',
-        createdAt: '2026-01-01',
-      };
-    }
     const found = stores.find((s) => s.id === selectedStoreIdForMd || matchStoreEntity(selectedStoreIdForMd, s));
     if (found) return found;
   } else if (currentUserStoreId) {
