@@ -89,13 +89,52 @@ export function normalizeSheetTableName(table: string): string {
 }
 
 /**
+ * Cleans and normalizes Google Apps Script URL
+ */
+export function cleanAppsScriptUrl(raw: string): string {
+  if (!raw) return '';
+  let url = raw.trim().replace(/['"]/g, '');
+  // Auto-correct /dev to /exec if user copied test URL
+  if (url.includes('/macros/s/') && url.endsWith('/dev')) {
+    url = url.replace(/\/dev$/, '/exec');
+  }
+  return url;
+}
+
+/**
+ * Validates Google Apps Script URL with specific guidance
+ */
+export function validateAppsScriptUrl(raw: string): { isValid: boolean; error?: string; cleanedUrl?: string } {
+  const cleaned = cleanAppsScriptUrl(raw);
+  if (!cleaned) {
+    return { isValid: false, error: 'URL Google Apps Script belum diisi.' };
+  }
+  if (!cleaned.startsWith('https://') && !cleaned.startsWith('http://')) {
+    return { isValid: false, error: 'URL harus diawali dengan https://' };
+  }
+  if (cleaned.includes('docs.google.com/spreadsheets')) {
+    return {
+      isValid: false,
+      error: 'URL yang Anda masukkan adalah link Spreadsheet Google Docs, BUKAN link Web App! Buka Spreadsheet > Ekstensi > Apps Script > Terapkan (Deploy) > Aplikasi Web (Web App), lalu salin URL yang berakhiran /exec.'
+    };
+  }
+  if (!cleaned.includes('script.google.com') && !cleaned.includes('/exec')) {
+    return {
+      isValid: false,
+      error: 'Format URL Web App Google Apps Script tidak dikenali. URL biasanya berupa: https://script.google.com/macros/s/.../exec'
+    };
+  }
+  return { isValid: true, cleanedUrl: cleaned };
+}
+
+/**
  * Get configured Google Apps Script Web App URL
  */
 export function getGoogleAppsScriptUrl(): string {
   // 1. User configured in browser / settings
   const localUrl = localStorage.getItem(STORAGE_KEY_URL);
   if (localUrl && localUrl.trim().startsWith('http')) {
-    return localUrl.trim();
+    return cleanAppsScriptUrl(localUrl);
   }
 
   // 2. Vite environment variable (if set during build or deploy on Netlify / Cloud)
@@ -105,22 +144,32 @@ export function getGoogleAppsScriptUrl(): string {
     (import.meta as any).env?.VITE_APPS_SCRIPT_URL;
 
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().startsWith('http')) {
-    return envUrl.trim();
+    return cleanAppsScriptUrl(envUrl);
   }
 
   return '';
 }
 
 /**
- * Set and persist Google Apps Script Web App URL
+ * Set and persist Google Apps Script Web App URL across browser and backend
  */
 export function setGoogleAppsScriptUrl(url: string): void {
-  const clean = url.trim();
+  saveGoogleAppsScriptUrl(url);
+}
+
+export function saveGoogleAppsScriptUrl(url: string): void {
+  const clean = cleanAppsScriptUrl(url);
   if (clean) {
     localStorage.setItem(STORAGE_KEY_URL, clean);
   } else {
     localStorage.removeItem(STORAGE_KEY_URL);
   }
+  // Sync to server backend asynchronously so other devices share it
+  fetch('/api/config/sheets-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: clean })
+  }).catch(() => {});
 }
 
 /**
@@ -138,64 +187,148 @@ export function setLastSyncTime(): void {
 }
 
 /**
- * Test connectivity to Google Apps Script Web App
+ * Parse and normalize payload data received from Google Spreadsheet
+ */
+function parseAllSheetsPayload(raw: any): AllSheetsData {
+  return {
+    stores: Array.isArray(raw.stores) ? raw.stores : [],
+    users: Array.isArray(raw.users) ? raw.users : [],
+    cogsMaster: Array.isArray(raw.cogsMaster) ? raw.cogsMaster : [],
+    thawingItems: Array.isArray(raw.thawingItems) ? raw.thawingItems : [],
+    fabricationSegments: Array.isArray(raw.fabricationSegments) ? raw.fabricationSegments : [],
+    closingPlanRecords: Array.isArray(raw.closingPlanRecords) ? raw.closingPlanRecords : [],
+    dailyClosingReports: Array.isArray(raw.dailyClosingReports) ? raw.dailyClosingReports : [],
+    stockAdjustments: Array.isArray(raw.stockAdjustments) ? raw.stockAdjustments : [],
+    dataSusut: Array.isArray(raw.dataSusut) ? raw.dataSusut : [],
+    lossConfig: raw.lossConfig || {
+      maxProcessLossPercent: 1.0,
+      maxSalesLossPercent: 1.0,
+      maxDailyLossPercent: 2.0,
+      safeThawingLossPercent: 1.0,
+      safeFabricationLossPercent: 1.0,
+      salesPredictionKg: 40.0,
+    },
+  };
+}
+
+/**
+ * Test connectivity to Google Apps Script Web App with dual POST/GET and Proxy fallback
  */
 export async function testAppsScriptConnection(testUrl?: string): Promise<{
   success: boolean;
   message: string;
   spreadsheetName?: string;
   spreadsheetId?: string;
+  normalizedUrl?: string;
 }> {
-  const url = testUrl || getGoogleAppsScriptUrl();
-  if (!url) {
+  const rawTarget = testUrl !== undefined ? testUrl : getGoogleAppsScriptUrl();
+  const validation = validateAppsScriptUrl(rawTarget);
+  if (!validation.isValid) {
     return {
       success: false,
-      message: 'URL Google Apps Script belum diisi. Masukkan URL Web App terlebih dahulu.'
+      message: validation.error || 'URL Web App tidak valid.'
     };
   }
 
+  const url = validation.cleanedUrl!;
+
+  // 1. Try POST ping (Bypasses 302 redirect & CORS preflight blocking)
+  try {
+    const postRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'ping', timestamp: new Date().toISOString() })
+    });
+    if (postRes.ok) {
+      const data = await postRes.json().catch(() => null);
+      if (data && (data.status === 'ONLINE' || data.success)) {
+        saveGoogleAppsScriptUrl(url);
+        return {
+          success: true,
+          message: data.message || 'Koneksi ke Google Spreadsheet Berhasil & Aktif!',
+          spreadsheetName: data.spreadsheetName,
+          spreadsheetId: data.spreadsheetId,
+          normalizedUrl: url
+        };
+      }
+    }
+  } catch (postErr) {
+    console.warn('[SheetsApi] POST ping failed, testing GET ping...', postErr);
+  }
+
+  // 2. Try GET ping
   try {
     const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=ping&_t=${Date.now()}`;
     const res = await fetch(fetchUrl, { method: 'GET' });
-    
-    if (!res.ok) {
-      return {
-        success: false,
-        message: `HTTP Error ${res.status}: ${res.statusText}. Pastikan Web App disetting "Who has access: Anyone".`
-      };
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && (data.status === 'ONLINE' || data.success)) {
+        saveGoogleAppsScriptUrl(url);
+        return {
+          success: true,
+          message: data.message || 'Koneksi ke Google Spreadsheet Berhasil & Aktif!',
+          spreadsheetName: data.spreadsheetName,
+          spreadsheetId: data.spreadsheetId,
+          normalizedUrl: url
+        };
+      }
     }
-
-    const data = await res.json();
-    if (data.status === 'ONLINE' || data.success) {
-      return {
-        success: true,
-        message: data.message || 'Koneksi ke Google Spreadsheet Berhasil & Aktif!',
-        spreadsheetName: data.spreadsheetName,
-        spreadsheetId: data.spreadsheetId,
-      };
-    }
-
-    return {
-      success: false,
-      message: data.error || 'Respon diterima namun status tidak ONLINE.'
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      message: `Gagal menghubungi Google Apps Script: ${err.message || 'Cek koneksi internet atau izin Web App.'}`
-    };
+  } catch (getErr) {
+    console.warn('[SheetsApi] GET ping failed, checking backend proxy...', getErr);
   }
+
+  // 3. Try server proxy fallback
+  try {
+    const proxyRes = await fetch('/api/sheets-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, payload: { action: 'ping' } })
+    });
+    if (proxyRes.ok) {
+      const data = await proxyRes.json().catch(() => null);
+      if (data && (data.status === 'ONLINE' || data.success)) {
+        saveGoogleAppsScriptUrl(url);
+        return {
+          success: true,
+          message: (data.message || 'Koneksi Berhasil!') + ' (Terhubung via Proxy Server)',
+          spreadsheetName: data.spreadsheetName,
+          spreadsheetId: data.spreadsheetId,
+          normalizedUrl: url
+        };
+      }
+    }
+  } catch (proxyErr) {}
+
+  return {
+    success: false,
+    message: 'Gagal terhubung ke Google Apps Script. Pastikan Web App diatur: "Execute as: Me" dan "Who has access: Anyone" (Siapa saja), lalu deploy versi baru (New deployment).',
+    normalizedUrl: url
+  };
 }
 
 /**
- * Fetch ALL 8 tables from Google Spreadsheet via Google Apps Script (GET request)
+ * Fetch ALL 8 tables from Google Spreadsheet via Google Apps Script
  */
 export async function fetchAllDataFromSheets(): Promise<{
   success: boolean;
   data?: AllSheetsData;
   error?: string;
 }> {
-  const url = getGoogleAppsScriptUrl();
+  let url = getGoogleAppsScriptUrl();
+  if (!url) {
+    // Check if server knows the URL
+    try {
+      const srvRes = await fetch('/api/config/sheets-url');
+      if (srvRes.ok) {
+        const srvData = await srvRes.json();
+        if (srvData?.url) {
+          url = cleanAppsScriptUrl(srvData.url);
+          saveGoogleAppsScriptUrl(url);
+        }
+      }
+    } catch {}
+  }
+
   if (!url) {
     return {
       success: false,
@@ -203,55 +336,64 @@ export async function fetchAllDataFromSheets(): Promise<{
     };
   }
 
+  const cleanUrl = cleanAppsScriptUrl(url);
+
+  // 1. Try POST (most reliable against mobile browser redirect blocking)
   try {
-    const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=getAllData&_t=${Date.now()}`;
+    const postRes = await fetch(cleanUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'getAllData', timestamp: new Date().toISOString() })
+    });
+    if (postRes.ok) {
+      const json = await postRes.json();
+      if (json.success && json.data) {
+        setLastSyncTime();
+        return { success: true, data: parseAllSheetsPayload(json.data) };
+      }
+    }
+  } catch (e) {
+    console.warn('[SheetsApi] POST getAllData failed, attempting GET...', e);
+  }
+
+  // 2. Try GET with action=getAllData
+  try {
+    const fetchUrl = `${cleanUrl}${cleanUrl.includes('?') ? '&' : '?'}action=getAllData&_t=${Date.now()}`;
     const res = await fetch(fetchUrl, {
       method: 'GET',
       headers: { 'Accept': 'application/json' }
     });
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.data) {
+        setLastSyncTime();
+        return { success: true, data: parseAllSheetsPayload(json.data) };
+      }
     }
-
-    const json = await res.json();
-    if (json.success && json.data) {
-      setLastSyncTime();
-      return {
-        success: true,
-        data: {
-          stores: Array.isArray(json.data.stores) ? json.data.stores : [],
-          users: Array.isArray(json.data.users) ? json.data.users : [],
-          cogsMaster: Array.isArray(json.data.cogsMaster) ? json.data.cogsMaster : [],
-          thawingItems: Array.isArray(json.data.thawingItems) ? json.data.thawingItems : [],
-          fabricationSegments: Array.isArray(json.data.fabricationSegments) ? json.data.fabricationSegments : [],
-          closingPlanRecords: Array.isArray(json.data.closingPlanRecords) ? json.data.closingPlanRecords : [],
-          dailyClosingReports: Array.isArray(json.data.dailyClosingReports) ? json.data.dailyClosingReports : [],
-          stockAdjustments: Array.isArray(json.data.stockAdjustments) ? json.data.stockAdjustments : [],
-          dataSusut: Array.isArray(json.data.dataSusut) ? json.data.dataSusut : [],
-          lossConfig: json.data.lossConfig || {
-            maxProcessLossPercent: 1.0,
-            maxSalesLossPercent: 1.0,
-            maxDailyLossPercent: 2.0,
-            safeThawingLossPercent: 1.0,
-            safeFabricationLossPercent: 1.0,
-            salesPredictionKg: 40.0,
-          },
-        }
-      };
-    }
-
-    return {
-      success: false,
-      error: json.error || 'Format data dari Spreadsheet tidak sesuai.'
-    };
-  } catch (err: any) {
-    console.warn('[Google Sheets Sync] Fetch all data failed:', err);
-    return {
-      success: false,
-      error: err.message || 'Gagal membaca data dari Google Spreadsheet.'
-    };
+  } catch (e) {
+    console.warn('[SheetsApi] GET getAllData failed, attempting backend proxy...', e);
   }
+
+  // 3. Try backend proxy
+  try {
+    const proxyRes = await fetch('/api/sheets-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: cleanUrl, payload: { action: 'getAllData' } })
+    });
+    if (proxyRes.ok) {
+      const json = await proxyRes.json();
+      if (json.success && json.data) {
+        setLastSyncTime();
+        return { success: true, data: parseAllSheetsPayload(json.data) };
+      }
+    }
+  } catch (e) {}
+
+  return {
+    success: false,
+    error: 'Tidak dapat mengambil data dari Google Spreadsheet. Periksa koneksi internet atau izin Web App.'
+  };
 }
 
 /**
