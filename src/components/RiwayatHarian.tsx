@@ -10,7 +10,6 @@ import {
   CogsMaster,
 } from '../types';
 import { exportStoreDailyLaporanExcel } from '../utils/excelExport';
-import { matchStoreEntity, isMatchPlan } from '../utils/storeHelper';
 import {
   Camera,
   Trash2,
@@ -25,10 +24,6 @@ import {
   FileSpreadsheet,
   Weight,
   Scale,
-  CheckCircle2,
-  AlertCircle,
-  Eye,
-  Check,
 } from 'lucide-react';
 
 interface RiwayatHarianProps {
@@ -341,15 +336,6 @@ export default function RiwayatHarian({
       alert('Gagal mengekspor laporan Excel.');
     }
   };
-
-  // Active closing records for active date & store
-  const activeClosingRecords = useMemo(() => {
-    return closingRecords.filter((rec) => {
-      if (!matchStoreEntity(rec.storeId, currentStore)) return false;
-      const recDate = (rec.date || rec.timestamp || '').split('T')[0];
-      return recDate === activeDate || (!rec.date && viewingTodayDraft);
-    });
-  }, [closingRecords, currentStore, activeDate, viewingTodayDraft]);
 
   // Sorted reports descending
   const sortedReports = useMemo(() => {

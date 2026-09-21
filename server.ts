@@ -1,11 +1,14 @@
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const { Pool } = pg;
 
@@ -14,7 +17,7 @@ let pool: pg.Pool | null = null;
 
 function getPool(): pg.Pool | null {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl || !dbUrl.trim()) {
+  if (!dbUrl) {
     return null;
   }
   if (!pool) {
@@ -46,18 +49,12 @@ function normalizeRole(dbRole: string): 'admin' | 'butcher' | 'md' {
 // Fallback in-memory store matching actual database structure
 const inMemoryStore = {
   stores: [
-    { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' },
-    { id: '2', code: 'BKS', name: 'TDN BKS', city: 'Bekasi', createdAt: '2026-01-15' },
-    { id: '3', code: 'BDG', name: 'TDN BDG', city: 'Bandung', createdAt: '2026-02-01' },
+    { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' }
   ],
   users: [
-    { id: '1', username: 'butcher_ckr', password: 'butcher123', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher CKR', linkedAccountId: '2', createdAt: '2026-01-01' },
-    { id: '2', username: 'admin_ckr', password: 'admin123', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin CKR', linkedAccountId: '1', createdAt: '2026-01-01' },
+    { id: '1', username: 'butcher_ckr', password: 'butcher123', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher CKR', createdAt: '2026-01-01' },
+    { id: '2', username: 'admin_ckr', password: 'admin123', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin CKR', createdAt: '2026-01-01' },
     { id: '3', username: 'md_pusat', password: 'md123', role: 'md', storeId: null, storeName: null, fullName: 'MD Pusat', createdAt: '2026-01-01' },
-    { id: '4', username: 'butcher_bks', password: 'butcher123', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher BKS', linkedAccountId: '5', createdAt: '2026-01-15' },
-    { id: '5', username: 'admin_bks', password: 'admin123', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin BKS', linkedAccountId: '4', createdAt: '2026-01-15' },
-    { id: '6', username: 'butcher_bdg', password: 'butcher123', role: 'butcher', storeId: '3', storeName: 'TDN BDG', fullName: 'Butcher BDG', linkedAccountId: '7', createdAt: '2026-02-01' },
-    { id: '7', username: 'admin_bdg', password: 'admin123', role: 'admin', storeId: '3', storeName: 'TDN BDG', fullName: 'Admin BDG', linkedAccountId: '6', createdAt: '2026-02-01' },
   ],
   cogsMaster: [
     { id: 'cogs_1', itemCode: 'DF-01', itemName: 'HQ 41/42/44/45 (Daging Fresh)', planName: 'HQ 41/42/44/45', cogsPerKg: 102000, defaultPricePerKg: 125000, sellingPricePerKg: 125000, category: 'DAGING FRESH', updatedAt: '2026-08-01', updatedBy: 'MD Pusat' },
@@ -73,7 +70,6 @@ const inMemoryStore = {
   fabricationSegments: [] as any[],
   stockAdjustments: [] as any[],
   closingPlanRecords: [] as any[],
-  dataSusut: [] as any[],
   dailyClosingReports: [] as any[],
   trainingFiles: [] as any[],
   dailyTargets: [] as any[],
@@ -89,94 +85,6 @@ const inMemoryStore = {
     salesPredictionKg: 40.0,
   }
 };
-
-// ----------------- LOCAL DISK PERSISTENCE FOR IN-MEMORY DATA ENGINE -----------------
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'local_database.json');
-
-function loadLocalStoreFromDisk() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (fs.existsSync(DB_FILE)) {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
-      const loaded = JSON.parse(content);
-      if (loaded && typeof loaded === 'object') {
-        if (Array.isArray(loaded.stores) && loaded.stores.length > 0) inMemoryStore.stores = loaded.stores;
-        if (Array.isArray(loaded.users) && loaded.users.length > 0) inMemoryStore.users = loaded.users;
-        if (Array.isArray(loaded.cogsMaster) && loaded.cogsMaster.length > 0) inMemoryStore.cogsMaster = loaded.cogsMaster;
-        if (Array.isArray(loaded.thawingItems)) inMemoryStore.thawingItems = loaded.thawingItems;
-        if (Array.isArray(loaded.fabricationSegments)) inMemoryStore.fabricationSegments = loaded.fabricationSegments;
-        if (Array.isArray(loaded.stockAdjustments)) inMemoryStore.stockAdjustments = loaded.stockAdjustments;
-        if (Array.isArray(loaded.closingPlanRecords)) inMemoryStore.closingPlanRecords = loaded.closingPlanRecords;
-        if (Array.isArray(loaded.dataSusut)) inMemoryStore.dataSusut = loaded.dataSusut;
-        if (Array.isArray(loaded.dailyClosingReports)) inMemoryStore.dailyClosingReports = loaded.dailyClosingReports;
-        if (Array.isArray(loaded.trainingFiles)) inMemoryStore.trainingFiles = loaded.trainingFiles;
-        if (Array.isArray(loaded.dailyTargets)) inMemoryStore.dailyTargets = loaded.dailyTargets;
-        if (Array.isArray(loaded.salesTrainingDataset)) inMemoryStore.salesTrainingDataset = loaded.salesTrainingDataset;
-        if (loaded.salesPredictionConfigs) inMemoryStore.salesPredictionConfigs = loaded.salesPredictionConfigs;
-        if (Array.isArray(loaded.pythonModels)) inMemoryStore.pythonModels = loaded.pythonModels;
-        if (loaded.lossConfig) inMemoryStore.lossConfig = loaded.lossConfig;
-        console.log(`[Storage] Loaded persisted database: ${inMemoryStore.thawingItems.length} thawing items, ${inMemoryStore.closingPlanRecords.length} closing records, ${inMemoryStore.dailyClosingReports.length} reports`);
-      }
-    }
-  } catch (err) {
-    console.error('[Storage] Error reading local store from disk:', err);
-  }
-}
-
-let persistTimeout: NodeJS.Timeout | null = null;
-function persistStoreToDisk() {
-  if (persistTimeout) clearTimeout(persistTimeout);
-  persistTimeout = setTimeout(() => {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      const tmpFile = `${DB_FILE}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify(inMemoryStore, null, 2), 'utf-8');
-      fs.renameSync(tmpFile, DB_FILE);
-    } catch (err) {
-      console.error('[Storage] Error persisting local store to disk:', err);
-    }
-  }, 100);
-}
-
-// Store matching helper handling all alias forms symmetrically
-function matchStoreIdBackend(entityStoreId: any, targetStoreId: any): boolean {
-  if (!targetStoreId) return true;
-  if (!entityStoreId) return true;
-  const e = String(entityStoreId).toLowerCase().trim();
-  const t = String(targetStoreId).toLowerCase().trim();
-  if (e === t) return true;
-
-  const isCkr = (s: string) => s === '1' || s === 'store_ckr' || s === 'ckr' || s === 'store_ckt' || s === 'ckt' || s.includes('ckr') || s.includes('cikarang');
-  if (isCkr(e) && isCkr(t)) return true;
-
-  const isBks = (s: string) => s === '2' || s === 'store_bks' || s === 'bks' || s.includes('bekasi');
-  if (isBks(e) && isBks(t)) return true;
-
-  const isBdg = (s: string) => s === '3' || s === 'store_bdg' || s === 'bdg' || s.includes('bandung');
-  if (isBdg(e) && isBdg(t)) return true;
-
-  return false;
-}
-
-function getStoreIdVariants(storeId?: string): string[] {
-  if (!storeId) return [];
-  const s = String(storeId).toLowerCase().trim();
-  if (s === '1' || s === 'store_ckr' || s === 'ckr' || s === 'store_ckt' || s === 'ckt' || s.includes('ckr') || s.includes('cikarang')) {
-    return ['1', 'store_ckr', 'ckr', 'CKR', 'store_ckt', 'TDN CKR'];
-  }
-  if (s === '2' || s === 'store_bks' || s === 'bks' || s.includes('bekasi')) {
-    return ['2', 'store_bks', 'bks', 'BKS', 'TDN BKS'];
-  }
-  if (s === '3' || s === 'store_bdg' || s === 'bdg' || s.includes('bandung')) {
-    return ['3', 'store_bdg', 'bdg', 'BDG', 'TDN BDG'];
-  }
-  return [storeId];
-}
 
 // Database Schema Initializer for PostgreSQL (DATABASE_URL)
 async function initDatabaseTables() {
@@ -363,17 +271,6 @@ async function initDatabaseTables() {
           safe_fabrication_loss_percent REAL NOT NULL,
           sales_prediction_kg REAL NOT NULL
         );
-
-        CREATE TABLE IF NOT EXISTS data_susut (
-          id TEXT PRIMARY KEY,
-          date TEXT NOT NULL,
-          store_name TEXT NOT NULL,
-          store_id TEXT NOT NULL,
-          plan_name TEXT NOT NULL,
-          susut_proses REAL NOT NULL,
-          susut_jual REAL NOT NULL,
-          created_at TEXT NOT NULL
-        );
       `);
 
       // Seed CKR store if empty
@@ -426,9 +323,6 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-  // Load persisted store from disk
-  loadLocalStoreFromDisk();
 
   // Initialize DB tables asynchronously
   initDatabaseTables();
@@ -518,49 +412,10 @@ async function startServer() {
         }
       }
 
-      // Memory Fallback with Intelligent Resolver
-      let user = inMemoryStore.users.find(
+      // Memory Fallback
+      const user = inMemoryStore.users.find(
         (u) => u.username.toLowerCase() === clean || u.username.toLowerCase().replace(/[\s_-]+/g, '') === clean.replace(/[\s_-]+/g, '')
       );
-
-      if (!user) {
-        const isMd = clean.includes('md') || clean.includes('pusat') || clean.includes('merchandis');
-        const isButcher = clean.includes('butcher') || clean.includes('jagal') || clean.includes('potong');
-        const isAdmin = clean.includes('admin') || clean.includes('toko') || clean.includes('spv');
-
-        if (isMd) {
-          user = inMemoryStore.users.find((u) => u.role === 'md') || inMemoryStore.users[2];
-        } else if (isButcher || isAdmin) {
-          const targetRole = isButcher ? 'butcher' : 'admin';
-          const partnerRole = isButcher ? 'admin' : 'butcher';
-          const matchedStore = inMemoryStore.stores.find((s) => {
-            const code = s.code.toLowerCase();
-            const city = s.city.toLowerCase().replace(/[\s_-]+/g, '');
-            const name = s.name.toLowerCase().replace(/[\s_-]+/g, '');
-            return clean.includes(code) || clean.replace(/[\s_-]+/g, '').includes(code) || clean.includes(city) || clean.includes(name);
-          }) || inMemoryStore.stores[0];
-
-          if (matchedStore) {
-            user = inMemoryStore.users.find((u) => u.role === targetRole && (u.storeId === matchedStore.id || (u.storeName && u.storeName.toLowerCase().includes(matchedStore.code.toLowerCase()))));
-            if (!user) {
-              const codeLower = matchedStore.code.toLowerCase();
-              user = {
-                id: `usr_${Date.now()}_${targetRole}`,
-                username: `${targetRole}_${codeLower}`,
-                password: `${targetRole}123`,
-                role: targetRole,
-                fullName: `${targetRole === 'butcher' ? 'Butcher' : 'Admin'} ${matchedStore.name}`,
-                storeId: matchedStore.id,
-                storeName: matchedStore.name,
-                linkedAccountId: `usr_${Date.now()}_${partnerRole}`,
-                createdAt: new Date().toISOString(),
-              };
-              inMemoryStore.users.push(user);
-            }
-          }
-        }
-      }
-
       if (!user) {
         return res.status(401).json({ error: `Akun '${username}' tidak ditemukan di database.` });
       }
@@ -576,7 +431,6 @@ async function startServer() {
           fullName: user.fullName,
           storeId: user.storeId ? user.storeId.toString() : undefined,
           storeName: user.storeName || undefined,
-          linkedAccountId: user.linkedAccountId || undefined,
           createdAt: user.createdAt,
         },
       });
@@ -614,72 +468,79 @@ async function startServer() {
       }
     });
 
-    if (table === 'Data_Thawing' || table === 'Thawing_Daging' || table === 'thawing_items') {
+    if (table === 'Thawing_Daging') {
       const startT = clean.thawingStartTime || clean.createdAt || new Date().toISOString();
       const endT = clean.thawingEndTime || (clean.status === 'pabrikasi_ready' || clean.status === 'pabrikasi_done' ? new Date().toISOString() : '');
-      const durMinutes = clean.durationMinutes || (startT && endT ? Math.round((new Date(endT).getTime() - new Date(startT).getTime()) / 60000) : 45);
-      const wBefore = Number(clean.weightBeforeThawing) || 0;
-      const wAfter = clean.weightAfterThawing !== undefined && clean.weightAfterThawing !== null && clean.weightAfterThawing !== '' ? Number(clean.weightAfterThawing) : wBefore;
-      const susut = clean.shrinkageThawing !== undefined && clean.shrinkageThawing !== null ? Number(clean.shrinkageThawing) : Math.max(0, wBefore - wAfter);
+      const durMinutes = clean.durationMinutes || (startT && endT ? Math.round((new Date(endT).getTime() - new Date(startT).getTime()) / 60000) : '');
 
       return {
-        'id': String(clean.id || ''),
-        'id toko': String(clean.storeId || '1'),
-        'nama toko': clean.storeName || 'TDN CKR',
-        'nama bahan': clean.name || clean['nama bahan'] || '',
-        'kategori': clean.category || clean.pabrikasiCategory || clean['kategori'] || 'DAGING FRESH',
-        'rencana pabrikasi': clean.plannedFabrication || clean['rencana pabrikasi'] || '',
-        'tanggal': (clean.createdAt || clean.thawingStartTime || new Date().toISOString()).split('T')[0],
-        'berat sebelum thawing': wBefore,
-        'berat setelah thawing': wAfter,
-        'foto': clean.image || clean.photoUrl || clean['foto'] || 'Foto Kamera Terlampir',
-        'susut proses': parseFloat(susut.toFixed(3)),
-        'durasi thawing': `${durMinutes} menit`,
-        'status': clean.status || 'thawing',
-        'waktu mulai': startT,
-        'petugas butcher': clean.butcherName || clean['petugas butcher'] || 'Butcher',
+        id: clean.id || `meat_${Date.now()}`,
+        storeId: clean.storeId || 'store_ckr',
+        name: clean.name || '',
+        pabrikasiCategory: clean.pabrikasiCategory || 'DAGING FRESH',
+        plannedFabrication: clean.plannedFabrication || clean.name || '',
+        openingPurpose: clean.openingPurpose || 'UNTUK DISPLAY',
+        status: clean.status || 'thawing',
+        weightBeforeThawing: Number(clean.weightBeforeThawing) || 0,
+        weightAfterThawing: clean.weightAfterThawing !== undefined && clean.weightAfterThawing !== null && clean.weightAfterThawing !== '' ? Number(clean.weightAfterThawing) : '',
+        shrinkageThawing: clean.shrinkageThawing !== undefined && clean.shrinkageThawing !== null && clean.shrinkageThawing !== '' ? Number(clean.shrinkageThawing) : '',
+        shrinkageThawingPercent: clean.shrinkageThawingPercent !== undefined && clean.shrinkageThawingPercent !== null && clean.shrinkageThawingPercent !== '' ? Number(clean.shrinkageThawingPercent) : '',
+        susutJualKg: Number(clean.susutJualKg) || 0,
+        salesKg: Number(clean.salesKg) || 0,
+        thawingStartTime: formatDateTime(startT),
+        thawingEndTime: endT ? formatDateTime(endT) : '',
+        durationMinutes: durMinutes || '',
+        butcherName: clean.butcherName || 'Butcher TDN Cikarang',
+        isCarryover: clean.isCarryover ? 'YA' : 'TIDAK',
+        image: clean.image || 'Foto Kamera Terlampir',
+        createdAt: formatDateTime(clean.createdAt || startT),
       };
     }
 
-    if (table === 'Data_Pabrikasi' || table === 'Pabrikasi_Segmen' || table === 'fabrication_segments') {
+    if (table === 'Pabrikasi_Segmen') {
       return {
-        'id': String(clean.id || ''),
-        'id item': String(clean.itemId || ''),
-        'id toko': String(clean.storeId || '1'),
-        'nama toko': clean.storeName || 'TDN CKR',
-        'nama bahan': clean.itemName || clean.name || clean['nama bahan'] || '',
-        'tanggal': (clean.createdAt || clean.transferTimestamp || new Date().toISOString()).split('T')[0],
-        'kategori': clean.category || clean.pabrikasiCategory || clean['kategori'] || 'DAGING FRESH',
-        'rencana pabrikasi': clean.plannedFabrication || clean.planName || clean['rencana pabrikasi'] || '',
-        'daftar segmen hasil potongan': clean.segmentName || clean['daftar segmen hasil potongan'] || '',
-        'Tujuan': clean.openingPurpose || clean['Tujuan'] || 'UNTUK DISPLAY',
-        'berat rencana pabrikasi': Number(clean.actualWeight || clean.targetWeight) || 0,
-        'susut pabrikasi': Number(clean.periodicShrinkage) || 0,
-        'foto': clean.photoUrl || clean['foto'] || 'Foto Kamera Terlampir',
+        id: clean.id || `seg_${Date.now()}`,
+        storeId: clean.storeId || 'store_ckr',
+        itemId: clean.itemId || '',
+        itemName: clean.itemName || '',
+        segmentName: clean.segmentName || '',
+        targetWeight: Number(clean.targetWeight) || 0,
+        actualWeight: Number(clean.actualWeight) || 0,
+        periodicShrinkage: Number(clean.periodicShrinkage) || 0,
+        salesKg: Number(clean.salesKg) || 0,
+        plannedFabrication: clean.plannedFabrication || '',
+        openingPurpose: clean.openingPurpose || 'UNTUK DISPLAY',
+        isTransferred: clean.isTransferred ? 'YA' : 'TIDAK',
+        originalPurpose: clean.originalPurpose || '',
+        transferTimestamp: clean.transferTimestamp ? formatDateTime(clean.transferTimestamp) : '',
+        createdAt: formatDateTime(clean.createdAt || new Date().toISOString()),
       };
     }
 
-    if (table === 'Closing_Rencana_Potong' || table === 'Closing_Fisik' || table === 'closing_plan_records') {
+    if (table === 'Closing_Fisik') {
       return {
-        'id': String(clean.id || ''),
-        'tanggal': clean.date || (clean.timestamp ? clean.timestamp.split('T')[0] : new Date().toISOString().split('T')[0]),
-        'nama toko': clean.storeName || 'TDN CKR',
-        'id toko': String(clean.storeId || '1'),
-        'nama bahan': clean.planName || clean.name || clean['nama bahan'] || '',
-        'kategori': clean.category || clean.pabrikasiCategory || 'DAGING FRESH',
-        'sisa kemarin': Number(clean.openingStockKg !== undefined ? clean.openingStockKg : clean['sisa kemarin']) || 0,
-        'diolah baru': Number(clean.newProcessedKg !== undefined ? clean.newProcessedKg : clean['diolah baru']) || 0,
-        'sales real': Number(clean.salesKg !== undefined ? clean.salesKg : clean['sales real']) || 0,
-        'timbangan sisa stok akhir': Number(clean.actualClosingStockKg !== undefined ? clean.actualClosingStockKg : clean['timbangan sisa stok akhir']) || 0,
-        'foto timbangan': clean.photoUrl || clean['foto timbangan'] || 'Foto Timbangan Terlampir',
-        'susut jual': Number(clean.susutJualKg !== undefined ? clean.susutJualKg : clean['susut jual']) || 0,
-        'status': clean.status || 'SELESAI',
-        'catatan': clean.note || clean['catatan'] || '-',
-        'petugas butcher': clean.butcherName || clean['petugas butcher'] || 'Butcher',
+        id: clean.id || `close_${Date.now()}`,
+        storeId: clean.storeId || 'store_ckr',
+        date: clean.date || new Date().toISOString().split('T')[0],
+        planName: clean.planName || '',
+        category: clean.category || 'DAGING FRESH',
+        openingStockKg: Number(clean.openingStockKg) || 0,
+        newProcessedKg: Number(clean.newProcessedKg) || 0,
+        salesKg: Number(clean.salesKg) || 0,
+        adjustInKg: Number(clean.adjustInKg) || 0,
+        adjustOutKg: Number(clean.adjustOutKg) || 0,
+        closingStockBySystemKg: Number(clean.closingStockBySystemKg) || 0,
+        actualClosingStockKg: Number(clean.actualClosingStockKg) || 0,
+        susutJualKg: Number(clean.susutJualKg) || 0,
+        photoUrl: clean.photoUrl ? 'Foto Timbangan Terlampir' : '',
+        photoCaption: clean.photoCaption || '',
+        note: clean.note || '',
+        butcherName: clean.butcherName || 'Butcher TDN',
+        timestamp: formatDateTime(clean.timestamp || new Date().toISOString()),
       };
     }
 
-    if (table === 'Laporan_Closing' || table === 'daily_closing_reports') {
+    if (table === 'Laporan_Closing') {
       return {
         id: clean.id || `rep_${Date.now()}`,
         storeId: clean.storeId || 'store_ckr',
@@ -702,62 +563,49 @@ async function startServer() {
       };
     }
 
-    if (table === 'Adjustment' || table === 'Koreksi_Stok' || table === 'stock_adjustments') {
+    if (table === 'Koreksi_Stok') {
       return {
-        'tanggal': clean.date || (clean.createdAt ? clean.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
-        'nama toko': clean.storeName || clean['nama toko'] || 'TDN CKR',
-        'id toko': String(clean.storeId || clean['id toko'] || '1'),
-        'jenis': clean.type || clean['jenis'] || 'IN',
-        'rencana potong': clean.planName || clean['rencana potong'] || '',
-        'berat': Number(clean.weightKg !== undefined ? clean.weightKg : clean['berat']) || 0,
-        'alasan': clean.reason || clean['alasan'] || '',
-      };
-    }
-
-    if (table === 'Data_Susut' || table === 'data_susut') {
-      return {
-        'tanggal': clean.date || (clean.createdAt ? clean.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
-        'nama toko': clean.storeName || clean['nama toko'] || 'TDN CKR',
-        'id toko': String(clean.storeId || clean['id toko'] || '1'),
-        'rencana potong': clean.planName || clean['rencana potong'] || '',
-        'susut proses': Number(clean.susutProses !== undefined ? clean.susutProses : clean['susut proses']) || 0,
-        'susut jual': Number(clean.susutJual !== undefined ? clean.susutJual : clean['susut jual']) || 0,
+        id: clean.id || `adj_${Date.now()}`,
+        storeId: clean.storeId || 'store_ckr',
+        planName: clean.planName || '',
+        type: clean.type || 'IN',
+        weightKg: Number(clean.weightKg) || 0,
+        reason: clean.reason || '',
+        adminName: clean.adminName || 'Admin Toko',
+        createdAt: formatDateTime(clean.createdAt || new Date().toISOString()),
       };
     }
 
     if (table === 'Pengguna' || table === 'users') {
       return {
-        'id': String(clean.id || ''),
-        'user name': clean.username || clean.userName || clean['user name'] || '',
-        'role': clean.role || '',
-        'full name': clean.fullName || clean.full_name || clean['full name'] || '',
-        'store id': String(clean.storeId || clean.store_id || clean['store id'] || ''),
-        'store name': clean.storeName || clean.store_name || clean['store name'] || '',
-        'created at': formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
+        id: clean.id || '',
+        username: clean.username || '',
+        role: clean.role || '',
+        fullName: clean.fullName || clean.full_name || '',
+        storeId: clean.storeId || clean.store_id || '',
+        storeName: clean.storeName || clean.store_name || '',
+        createdAt: formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
       };
     }
 
     if (table === 'Toko_Cabang' || table === 'stores') {
       return {
-        'id': String(clean.id || ''),
-        'code': clean.code || clean.kode || clean['code'] || '',
-        'name': clean.name || clean.nama || clean['name'] || '',
-        'city': clean.city || clean.kota || clean['city'] || '',
-        'created at': formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
+        id: clean.id || '',
+        code: clean.code || clean.kode || '',
+        name: clean.name || clean.nama || '',
+        city: clean.city || clean.kota || '',
+        createdAt: formatDateTime(clean.createdAt || clean.created_at || new Date().toISOString()),
       };
     }
 
     if (table === 'Master_COGS' || table === 'cogs_master') {
       return {
-        'id': String(clean.id || ''),
-        'item code': clean.itemCode || clean.item_code || clean['item code'] || '',
-        'item name': clean.itemName || clean.item_name || clean['item name'] || '',
-        'plan name': clean.planName || clean.plan_name || clean['plan name'] || '',
-        'cogs per kg': Number(clean.cogsPerKg || clean.cogs_per_kg) || 0,
-        'selling price': Number(clean.sellingPricePerKg || clean.selling_price_per_kg || clean.defaultPricePerKg) || 0,
-        'kategori': clean.category || clean['kategori'] || '',
-        'updated at': formatDateTime(clean.updatedAt || clean.updated_at || new Date().toISOString()),
-        'updated by': clean.updatedBy || clean.updated_by || clean['updated by'] || 'MD Pusat',
+        id: clean.id || '',
+        planName: clean.planName || clean.itemName || '',
+        cogsPerKg: Number(clean.cogsPerKg) || 0,
+        sellingPricePerKg: Number(clean.sellingPricePerKg || clean.defaultPricePerKg) || 0,
+        category: clean.category || '',
+        updatedAt: formatDateTime(clean.updatedAt || new Date().toISOString()),
       };
     }
 
@@ -765,26 +613,18 @@ async function startServer() {
   };
 
   const TABLE_SCHEMA_HEADERS: Record<string, string[]> = {
-    'Data_Thawing': ['id', 'id toko', 'nama toko', 'nama bahan', 'kategori', 'rencana pabrikasi', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status', 'waktu mulai', 'petugas butcher'],
-    'Data_Pabrikasi': ['id', 'id item', 'id toko', 'nama toko', 'nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi', 'susut pabrikasi', 'foto'],
-    'Closing_Rencana_Potong': ['id', 'tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
-    'Pengguna': ['id', 'user name', 'role', 'full name', 'store id', 'store name', 'created at'],
-    'Toko_Cabang': ['id', 'code', 'name', 'city', 'created at'],
-    'Master_COGS': ['id', 'item code', 'item name', 'plan name', 'cogs per kg', 'selling price', 'kategori', 'updated at', 'updated by'],
-    'Adjustment': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
-    'Data_Susut': ['tanggal', 'nama toko', 'id toko', 'rencana potong', 'susut proses', 'susut jual'],
-    // Backward compatibility aliases
-    'Thawing_Daging': ['id', 'id toko', 'nama toko', 'nama bahan', 'kategori', 'rencana pabrikasi', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status', 'waktu mulai', 'petugas butcher'],
-    'Pabrikasi_Segmen': ['id', 'id item', 'id toko', 'nama toko', 'nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi', 'susut pabrikasi', 'foto'],
-    'Closing_Fisik': ['id', 'tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
-    'Koreksi_Stok': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
+    'Toko_Cabang': ['id', 'code', 'name', 'city', 'createdAt'],
+    'Pengguna': ['id', 'username', 'role', 'fullName', 'storeId', 'storeName', 'createdAt'],
+    'Master_COGS': ['id', 'planName', 'cogsPerKg', 'sellingPricePerKg', 'category', 'updatedAt'],
+    'Thawing_Daging': ['id', 'storeId', 'name', 'pabrikasiCategory', 'plannedFabrication', 'openingPurpose', 'status', 'weightBeforeThawing', 'weightAfterThawing', 'shrinkageThawing', 'shrinkageThawingPercent', 'susutJualKg', 'salesKg', 'thawingStartTime', 'thawingEndTime', 'durationMinutes', 'butcherName', 'isCarryover', 'image', 'createdAt'],
+    'Pabrikasi_Segmen': ['id', 'storeId', 'itemId', 'itemName', 'segmentName', 'targetWeight', 'actualWeight', 'periodicShrinkage', 'salesKg', 'plannedFabrication', 'openingPurpose', 'isTransferred', 'originalPurpose', 'transferTimestamp', 'createdAt'],
+    'Closing_Fisik': ['id', 'storeId', 'planName', 'date', 'displayClosingKg', 'pesananClosingKg', 'totalPhysicalClosingKg', 'photoDisplayUrl', 'photoPesananUrl', 'timestamp'],
     'Laporan_Closing': ['id', 'storeId', 'storeName', 'date', 'totalWeightRaw', 'totalWeightAfterThawing', 'totalWeightFabricated', 'totalPeriodicShrinkage', 'totalSales', 'totalEndStock', 'thawingLossPercent', 'fabricationLossPercent', 'salesLossPercent', 'overallLossPercent', 'statusAlert', 'closingPhotoUrl', 'butcherName', 'createdAt'],
+    'Koreksi_Stok': ['id', 'storeId', 'planName', 'type', 'weightKg', 'reason', 'adminName', 'createdAt'],
   };
 
-  let runtimeAppsScriptUrl = process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL || process.env.VITE_GOOGLE_SHEETS_APPS_SCRIPT_URL || '';
-
   const syncToSheetsBackend = async (table: string, items: any[]) => {
-    const appsScriptUrl = runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
+    const appsScriptUrl = process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
     if (!appsScriptUrl) return;
 
     try {
@@ -811,19 +651,19 @@ async function startServer() {
   };
 
   const syncAll8Tables = async () => {
-    const appsScriptUrl = runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
+    const appsScriptUrl = process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
     if (!appsScriptUrl) return;
 
     console.log('[Google Sheets Backend] Initiating complete 8-table mirroring to Google Sheets...');
     const allTables: Array<{ name: string; items: any[] }> = [
-      { name: 'Data_Thawing', items: inMemoryStore.thawingItems },
-      { name: 'Data_Pabrikasi', items: inMemoryStore.fabricationSegments },
-      { name: 'Closing_Rencana_Potong', items: inMemoryStore.closingPlanRecords },
-      { name: 'Pengguna', items: inMemoryStore.users },
       { name: 'Toko_Cabang', items: inMemoryStore.stores },
+      { name: 'Pengguna', items: inMemoryStore.users },
       { name: 'Master_COGS', items: inMemoryStore.cogsMaster },
-      { name: 'Adjustment', items: inMemoryStore.stockAdjustments },
-      { name: 'Data_Susut', items: inMemoryStore.dataSusut },
+      { name: 'Thawing_Daging', items: inMemoryStore.thawingItems },
+      { name: 'Pabrikasi_Segmen', items: inMemoryStore.fabricationSegments },
+      { name: 'Closing_Fisik', items: inMemoryStore.closingPlanRecords },
+      { name: 'Laporan_Closing', items: inMemoryStore.dailyClosingReports },
+      { name: 'Koreksi_Stok', items: inMemoryStore.stockAdjustments },
     ];
 
     for (const t of allTables) {
@@ -831,41 +671,6 @@ async function startServer() {
     }
     console.log('[Google Sheets Backend] Complete 8-table mirroring finished.');
   };
-
-  // Google Sheets Apps Script URL Configuration API
-  app.get('/api/config/sheets-url', (req, res) => {
-    res.json({
-      url: runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL || ''
-    });
-  });
-
-  app.post('/api/config/sheets-url', (req, res) => {
-    const { url } = req.body || {};
-    if (typeof url === 'string') {
-      runtimeAppsScriptUrl = url.trim();
-      process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL = runtimeAppsScriptUrl;
-    }
-    res.json({ success: true, url: runtimeAppsScriptUrl });
-  });
-
-  // Proxy endpoint for Google Sheets to prevent CORS & 302 redirect issues on clients
-  app.post('/api/sheets-proxy', async (req, res) => {
-    const targetUrl = req.body?.url || runtimeAppsScriptUrl || process.env.GOOGLE_SHEETS_APPS_SCRIPT_URL;
-    if (!targetUrl) {
-      return res.status(400).json({ success: false, error: 'URL Google Apps Script belum dikonfigurasi di server.' });
-    }
-    try {
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(req.body?.payload || req.body),
-      });
-      const data = await response.json();
-      res.json(data);
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
-    }
-  });
 
   // ----------------- STORES -----------------
   app.get('/api/stores', async (req, res) => {
@@ -892,124 +697,75 @@ async function startServer() {
 
   app.post('/api/stores', async (req, res) => {
     try {
-      const incoming = Array.isArray(req.body) ? req.body : [req.body];
-      const savedStores: any[] = [];
+      const { code, name, city } = req.body;
+      const codeUpper = (code || '').toUpperCase().trim();
+      const codeLower = (code || '').toLowerCase().trim();
+      const storeName = (name || '').trim();
+      const storeCity = (city || '').trim();
+      const createdAt = new Date().toISOString().split('T')[0];
 
-      for (const item of incoming) {
-        if (!item) continue;
-        const codeUpper = (item.code || '').toUpperCase().trim();
-        const codeLower = (item.code || '').toLowerCase().trim();
-        const storeName = (item.name || `TDN ${codeUpper}`).trim();
-        const storeCity = (item.city || '').trim();
-        const createdAt = item.createdAt || new Date().toISOString().split('T')[0];
+      let storeId = '1';
 
-        let storeId = item.id ? item.id.toString() : (codeLower ? `store_${codeLower}` : `${inMemoryStore.stores.length + 1}`);
+      const p = getPool();
+      if (p) {
+        try {
+          const insertRes = await p.query(
+            `INSERT INTO stores (code, name, city, created_at)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id`,
+            [codeUpper, storeName, storeCity, createdAt]
+          );
+          storeId = insertRes.rows[0].id.toString();
 
-        const p = getPool();
-        if (p) {
-          try {
-            const insertRes = await p.query(
-              `INSERT INTO stores (code, name, city, created_at)
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT (code) DO UPDATE SET name = $2, city = $3
-               RETURNING id`,
-              [codeUpper, storeName, storeCity, createdAt]
-            );
-            if (insertRes.rows.length > 0) {
-              storeId = insertRes.rows[0].id.toString();
-            }
+          // Create Butcher and Admin for this store
+          const intStoreId = parseInt(storeId, 10) || 1;
+          await p.query(
+            `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
+            [`butcher_${codeLower}`, 'butcher123', 'butcher', `Butcher ${codeUpper}`, intStoreId, storeName, createdAt]
+          );
 
-            const intStoreId = parseInt(storeId, 10) || 1;
-            await p.query(
-              `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
-               ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
-              [`butcher_${codeLower}`, item.butcherPassword || 'butcher123', 'butcher', item.butcherName || `Butcher ${codeUpper}`, intStoreId, storeName, createdAt]
-            );
-
-            await p.query(
-              `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
-               ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
-              [`admin_${codeLower}`, item.adminPassword || 'admin123', 'admin_toko', item.adminName || `Admin ${codeUpper}`, intStoreId, storeName, createdAt]
-            );
-          } catch (dbErr) {
-            console.error('Postgres insert store error:', dbErr);
-          }
+          await p.query(
+            `INSERT INTO users (username, password, role, full_name, store_id, store_name, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (username) DO UPDATE SET full_name = $4, store_name = $6`,
+            [`admin_${codeLower}`, 'admin123', 'admin_toko', `Admin ${codeUpper}`, intStoreId, storeName, createdAt]
+          );
+        } catch (dbErr) {
+          console.error('Postgres insert store error:', dbErr);
         }
-
-        const newStore = { id: storeId, code: codeUpper, name: storeName, city: storeCity, createdAt };
-        const existingStoreIdx = inMemoryStore.stores.findIndex((s) => s.id === storeId || (codeUpper && s.code === codeUpper));
-        if (existingStoreIdx >= 0) {
-          inMemoryStore.stores[existingStoreIdx] = { ...inMemoryStore.stores[existingStoreIdx], ...newStore };
-        } else {
-          inMemoryStore.stores.push(newStore);
-        }
-
-        const butcherUser = {
-          id: `usr_b_${storeId}`,
-          username: `butcher_${codeLower}`,
-          password: item.butcherPassword || 'butcher123',
-          role: 'butcher',
-          fullName: item.butcherName || `Butcher ${codeUpper}`,
-          storeId: storeId,
-          storeName: storeName,
-          linkedAccountId: `usr_a_${storeId}`,
-          createdAt,
-        };
-
-        const adminUser = {
-          id: `usr_a_${storeId}`,
-          username: `admin_${codeLower}`,
-          password: item.adminPassword || 'admin123',
-          role: 'admin',
-          fullName: item.adminName || `Admin ${codeUpper}`,
-          storeId: storeId,
-          storeName: storeName,
-          linkedAccountId: `usr_b_${storeId}`,
-          createdAt,
-        };
-
-        const bIdx = inMemoryStore.users.findIndex((u) => u.username === butcherUser.username);
-        if (bIdx >= 0) inMemoryStore.users[bIdx] = { ...inMemoryStore.users[bIdx], ...butcherUser };
-        else inMemoryStore.users.push(butcherUser);
-
-        const aIdx = inMemoryStore.users.findIndex((u) => u.username === adminUser.username);
-        if (aIdx >= 0) inMemoryStore.users[aIdx] = { ...inMemoryStore.users[aIdx], ...adminUser };
-        else inMemoryStore.users.push(adminUser);
-
-        savedStores.push(newStore);
       }
+
+      const newStore = { id: storeId, code: codeUpper, name: storeName, city: storeCity, createdAt };
+      inMemoryStore.stores.push(newStore);
+      
+      const newButcherUser = {
+        id: `usr_${Date.now()}_1`,
+        username: `butcher_${codeLower}`,
+        password: 'butcher123',
+        role: 'butcher',
+        fullName: `Butcher ${codeUpper}`,
+        storeId: storeId,
+        storeName: storeName,
+        createdAt,
+      };
+      const newAdminUser = {
+        id: `usr_${Date.now()}_2`,
+        username: `admin_${codeLower}`,
+        password: 'admin123',
+        role: 'admin_toko',
+        fullName: `Admin ${codeUpper}`,
+        storeId: storeId,
+        storeName: storeName,
+        createdAt,
+      };
+      inMemoryStore.users.push(newButcherUser, newAdminUser);
 
       syncToSheetsBackend('Toko_Cabang', inMemoryStore.stores);
       syncToSheetsBackend('Pengguna', inMemoryStore.users);
 
-      res.json({ success: true, stores: inMemoryStore.stores, store: savedStores[0] });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post('/api/users', async (req, res) => {
-    try {
-      const incoming = Array.isArray(req.body) ? req.body : [req.body];
-      incoming.forEach((u: any) => {
-        if (!u || !u.username) return;
-        const cleanUser = u.username.toLowerCase().trim();
-        const idx = inMemoryStore.users.findIndex((item) => item.username.toLowerCase().trim() === cleanUser);
-        const normUser = {
-          ...u,
-          role: normalizeRole(u.role),
-          password: u.password || (normalizeRole(u.role) === 'md' ? 'md123' : `${normalizeRole(u.role)}123`),
-        };
-        if (idx >= 0) {
-          inMemoryStore.users[idx] = { ...inMemoryStore.users[idx], ...normUser };
-        } else {
-          inMemoryStore.users.push(normUser);
-        }
-      });
-      syncToSheetsBackend('Pengguna', inMemoryStore.users);
-      res.json({ success: true, users: inMemoryStore.users });
+      res.json({ success: true, store: newStore });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1154,9 +910,8 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          const variants = getStoreIdVariants(storeId);
-          query += ` WHERE store_id = ANY($1)`;
-          params.push(variants);
+          query += ` WHERE store_id = $1`;
+          params.push(storeId);
         }
         query += ` ORDER BY created_at DESC`;
         const result = await p.query(query, params);
@@ -1165,9 +920,7 @@ async function startServer() {
         console.warn('Postgres fetch thawing items error:', err);
       }
     }
-    const filtered = storeId
-      ? inMemoryStore.thawingItems.filter((i) => matchStoreIdBackend(i.storeId, storeId))
-      : inMemoryStore.thawingItems;
+    const filtered = storeId ? inMemoryStore.thawingItems.filter((i) => !i.storeId || i.storeId === storeId) : inMemoryStore.thawingItems;
     res.json(filtered);
   });
 
@@ -1207,18 +960,18 @@ async function startServer() {
           console.error('Postgres save thawing items error:', dbErr);
         }
       }
-      const incoming = Array.isArray(req.body) ? req.body : [req.body];
-      incoming.forEach((item: any) => {
-        if (!item || !item.id) return;
+      if (Array.isArray(req.body)) {
+        inMemoryStore.thawingItems = req.body;
+      } else {
+        const item = req.body;
         const idx = inMemoryStore.thawingItems.findIndex((i) => i.id === item.id);
         if (idx >= 0) {
           inMemoryStore.thawingItems[idx] = { ...inMemoryStore.thawingItems[idx], ...item };
         } else {
           inMemoryStore.thawingItems.unshift(item);
         }
-      });
-      persistStoreToDisk();
-      syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
+      }
+      syncToSheetsBackend('Thawing_Daging', inMemoryStore.thawingItems);
       res.json({ success: true, items: inMemoryStore.thawingItems });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1232,8 +985,6 @@ async function startServer() {
         await p.query('DELETE FROM thawing_items WHERE id = $1', [req.params.id]);
       }
       inMemoryStore.thawingItems = inMemoryStore.thawingItems.filter((i) => i.id !== req.params.id);
-      persistStoreToDisk();
-      syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1258,9 +1009,8 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          const variants = getStoreIdVariants(storeId);
-          query += ` WHERE store_id = ANY($1)`;
-          params.push(variants);
+          query += ` WHERE store_id = $1`;
+          params.push(storeId);
         }
         query += ` ORDER BY created_at DESC`;
         const result = await p.query(query, params);
@@ -1269,9 +1019,7 @@ async function startServer() {
         console.warn('Postgres fetch fabrication segments error:', err);
       }
     }
-    const filtered = storeId
-      ? inMemoryStore.fabricationSegments.filter((s) => matchStoreIdBackend(s.storeId, storeId))
-      : inMemoryStore.fabricationSegments;
+    const filtered = storeId ? inMemoryStore.fabricationSegments.filter((s) => !s.storeId || s.storeId === storeId) : inMemoryStore.fabricationSegments;
     res.json(filtered);
   });
 
@@ -1304,18 +1052,18 @@ async function startServer() {
           console.error('Postgres save segments error:', dbErr);
         }
       }
-      const incoming = Array.isArray(req.body) ? req.body : [req.body];
-      incoming.forEach((seg: any) => {
-        if (!seg || !seg.id) return;
+      if (Array.isArray(req.body)) {
+        inMemoryStore.fabricationSegments = req.body;
+      } else {
+        const seg = req.body;
         const idx = inMemoryStore.fabricationSegments.findIndex((s) => s.id === seg.id);
         if (idx >= 0) {
           inMemoryStore.fabricationSegments[idx] = { ...inMemoryStore.fabricationSegments[idx], ...seg };
         } else {
           inMemoryStore.fabricationSegments.unshift(seg);
         }
-      });
-      persistStoreToDisk();
-      syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
+      }
+      syncToSheetsBackend('Pabrikasi_Segmen', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1333,8 +1081,7 @@ async function startServer() {
         }
       }
       inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter((s) => s.id !== req.params.id);
-      persistStoreToDisk();
-      syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
+      syncToSheetsBackend('Pabrikasi_Segmen', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1355,9 +1102,8 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          const variants = getStoreIdVariants(storeId);
-          query += ` WHERE store_id = ANY($1)`;
-          params.push(variants);
+          query += ` WHERE store_id = $1`;
+          params.push(storeId);
         }
         query += ` ORDER BY created_at DESC`;
         const result = await p.query(query, params);
@@ -1366,7 +1112,7 @@ async function startServer() {
         console.warn('Postgres fetch adjustments error:', err);
       }
     }
-    const filtered = storeId ? inMemoryStore.stockAdjustments.filter((a) => matchStoreIdBackend(a.storeId, storeId)) : inMemoryStore.stockAdjustments;
+    const filtered = storeId ? inMemoryStore.stockAdjustments.filter((a) => !a.storeId || a.storeId === storeId) : inMemoryStore.stockAdjustments;
     res.json(filtered);
   });
 
@@ -1388,18 +1134,18 @@ async function startServer() {
           console.error('Postgres save adjustments error:', dbErr);
         }
       }
-      const incoming = Array.isArray(req.body) ? req.body : [req.body];
-      incoming.forEach((a: any) => {
-        if (!a || !a.id) return;
+      if (Array.isArray(req.body)) {
+        inMemoryStore.stockAdjustments = req.body;
+      } else {
+        const a = req.body;
         const idx = inMemoryStore.stockAdjustments.findIndex((item) => item.id === a.id);
         if (idx >= 0) {
           inMemoryStore.stockAdjustments[idx] = { ...inMemoryStore.stockAdjustments[idx], ...a };
         } else {
           inMemoryStore.stockAdjustments.unshift(a);
         }
-      });
-      persistStoreToDisk();
-      syncToSheetsBackend('Adjustment', inMemoryStore.stockAdjustments);
+      }
+      syncToSheetsBackend('Koreksi_Stok', inMemoryStore.stockAdjustments);
       res.json({ success: true, adjustments: inMemoryStore.stockAdjustments });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1432,9 +1178,8 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          const variants = getStoreIdVariants(storeId);
-          query += ` WHERE store_id = ANY($1)`;
-          params.push(variants);
+          query += ` WHERE store_id = $1`;
+          params.push(storeId);
         }
         query += ` ORDER BY timestamp DESC`;
         const result = await p.query(query, params);
@@ -1446,7 +1191,16 @@ async function startServer() {
       }
     }
     const filtered = storeId
-      ? inMemoryStore.closingPlanRecords.filter((r) => matchStoreIdBackend(r.storeId, storeId))
+      ? inMemoryStore.closingPlanRecords.filter((r) => {
+          if (!r.storeId) return true;
+          if (r.storeId === storeId) return true;
+          const s1 = String(r.storeId).toLowerCase();
+          const s2 = String(storeId).toLowerCase();
+          return (
+            (s1 === '1' || s1 === 'store_ckr' || s1 === 'ckr') &&
+            (s2 === '1' || s2 === 'store_ckr' || s2 === 'ckr')
+          );
+        })
       : inMemoryStore.closingPlanRecords;
     res.json(filtered);
   });
@@ -1506,8 +1260,7 @@ async function startServer() {
           if (r.id && item.id && item.id === r.id) return true;
           const iPlan = (item.planName || '').toLowerCase().trim();
           const iDate = (item.date || '').split('T')[0];
-          const storeMatches = matchStoreIdBackend(item.storeId, r.storeId);
-          return iPlan && rPlan && iPlan === rPlan && (!iDate || !rDate || iDate === rDate) && storeMatches;
+          return iPlan && rPlan && iPlan === rPlan && (!iDate || !rDate || iDate === rDate);
         });
         if (idx >= 0) {
           inMemoryStore.closingPlanRecords[idx] = { ...inMemoryStore.closingPlanRecords[idx], ...r };
@@ -1515,8 +1268,7 @@ async function startServer() {
           inMemoryStore.closingPlanRecords.unshift(r);
         }
       });
-      persistStoreToDisk();
-      syncToSheetsBackend('Closing_Rencana_Potong', inMemoryStore.closingPlanRecords);
+      syncToSheetsBackend('Closing_Fisik', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1534,103 +1286,8 @@ async function startServer() {
         }
       }
       inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter((r) => r.id !== req.params.id);
-      persistStoreToDisk();
-      syncToSheetsBackend('Closing_Rencana_Potong', inMemoryStore.closingPlanRecords);
+      syncToSheetsBackend('Closing_Fisik', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ----------------- DATA SUSUT (SHEET 8) -----------------
-  app.get('/api/data-susut', async (req, res) => {
-    const storeId = req.query.storeId as string | undefined;
-    const date = req.query.date as string | undefined;
-    const p = getPool();
-    if (p) {
-      try {
-        let query = `
-          SELECT id, date, store_name as "storeName", store_id as "storeId",
-                 plan_name as "planName", susut_proses as "susutProses",
-                 susut_jual as "susutJual", created_at as "createdAt"
-          FROM data_susut
-        `;
-        const params: any[] = [];
-        const conds: string[] = [];
-        if (storeId) {
-          const variants = getStoreIdVariants(storeId);
-          conds.push(`store_id = ANY($${params.length + 1})`);
-          params.push(variants);
-        }
-        if (date) {
-          conds.push(`date = $${params.length + 1}`);
-          params.push(date);
-        }
-        if (conds.length > 0) {
-          query += ` WHERE ` + conds.join(' AND ');
-        }
-        query += ` ORDER BY date DESC, created_at DESC`;
-        const result = await p.query(query, params);
-        if (result.rows.length > 0) {
-          return res.json(result.rows);
-        }
-      } catch (err) {
-        console.warn('Postgres fetch data susut error:', err);
-      }
-    }
-    let filtered = inMemoryStore.dataSusut;
-    if (storeId) {
-      filtered = filtered.filter((s) => matchStoreIdBackend(s.storeId, storeId));
-    }
-    if (date) {
-      filtered = filtered.filter((s) => !s.date || s.date === date);
-    }
-    res.json(filtered);
-  });
-
-  app.post('/api/data-susut', async (req, res) => {
-    try {
-      const records = Array.isArray(req.body) ? req.body : [req.body];
-      const p = getPool();
-      if (p) {
-        try {
-          for (const s of records) {
-            await p.query(
-              `INSERT INTO data_susut (id, date, store_name, store_id, plan_name, susut_proses, susut_jual, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               ON CONFLICT (id) DO UPDATE SET
-                 date = $2, store_name = $3, store_id = $4, plan_name = $5,
-                 susut_proses = $6, susut_jual = $7`,
-              [
-                s.id || `susut_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                s.date || new Date().toISOString().split('T')[0],
-                s.storeName || 'TDN CKR',
-                s.storeId || '1',
-                s.planName || '',
-                Number(s.susutProses) || 0,
-                Number(s.susutJual) || 0,
-                s.createdAt || new Date().toISOString()
-              ]
-            );
-          }
-        } catch (dbErr) {
-          console.error('Postgres save data susut error:', dbErr);
-        }
-      }
-
-      records.forEach((s: any) => {
-        if (!s) return;
-        const idx = inMemoryStore.dataSusut.findIndex((item: any) => item.id === s.id);
-        if (idx >= 0) {
-          inMemoryStore.dataSusut[idx] = { ...inMemoryStore.dataSusut[idx], ...s };
-        } else {
-          inMemoryStore.dataSusut.unshift(s);
-        }
-      });
-
-      persistStoreToDisk();
-      syncToSheetsBackend('Data_Susut', inMemoryStore.dataSusut);
-      res.json({ success: true, dataSusut: inMemoryStore.dataSusut });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1638,10 +1295,7 @@ async function startServer() {
 
   app.delete('/api/purge-date', async (req, res) => {
     try {
-      const targetDate = req.query.date as string;
-      if (!targetDate) {
-        return res.status(400).json({ error: 'Parameter date is required' });
-      }
+      const targetDate = (req.query.date as string) || '2026-08-29';
       inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter(
         (r) => (r.date || r.timestamp || '').split('T')[0] !== targetDate
       );
@@ -1649,7 +1303,7 @@ async function startServer() {
         (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== targetDate
       );
       inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter(
-        (s) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== targetDate
+        (s) => (s.createdAt || '').split('T')[0] !== targetDate
       );
       inMemoryStore.stockAdjustments = inMemoryStore.stockAdjustments.filter(
         (a) => (a.createdAt || a.date || '').split('T')[0] !== targetDate
@@ -1657,10 +1311,6 @@ async function startServer() {
       inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter(
         (r) => (r.date || '').split('T')[0] !== targetDate
       );
-      inMemoryStore.dataSusut = inMemoryStore.dataSusut.filter(
-        (s) => (s.date || s.createdAt || '').split('T')[0] !== targetDate
-      );
-      persistStoreToDisk();
 
       const p = getPool();
       if (p) {
@@ -1670,36 +1320,11 @@ async function startServer() {
           await p.query('DELETE FROM fabrication_segments WHERE created_at LIKE $1', [`${targetDate}%`]);
           await p.query('DELETE FROM stock_adjustments WHERE created_at LIKE $1', [`${targetDate}%`]);
           await p.query('DELETE FROM daily_closing_reports WHERE date = $1', [targetDate]);
-          await p.query('DELETE FROM data_susut WHERE date = $1', [targetDate]);
         } catch (dbErr) {
           console.error('Postgres purge date error:', dbErr);
         }
       }
       res.json({ success: true, purgedDate: targetDate });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.delete('/api/purge-all-data', async (req, res) => {
-    try {
-      inMemoryStore.closingPlanRecords = [];
-      inMemoryStore.thawingItems = [];
-      inMemoryStore.fabricationSegments = [];
-      inMemoryStore.stockAdjustments = [];
-      inMemoryStore.dailyClosingReports = [];
-      inMemoryStore.dataSusut = [];
-      persistStoreToDisk();
-
-      const p = getPool();
-      if (p) {
-        try {
-          await p.query('TRUNCATE TABLE closing_plan_records, thawing_items, fabrication_segments, stock_adjustments, daily_closing_reports, data_susut');
-        } catch (dbErr) {
-          console.error('Postgres purge all error:', dbErr);
-        }
-      }
-      res.json({ success: true, message: 'Semua data transaksi terinput dan dummy berhasil dibersihkan.' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1732,9 +1357,8 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          const variants = getStoreIdVariants(storeId);
-          query += ` WHERE store_id = ANY($1)`;
-          params.push(variants);
+          query += ` WHERE store_id = $1`;
+          params.push(storeId);
         }
         query += ` ORDER BY date DESC, created_at DESC`;
         const result = await p.query(query, params);
@@ -1754,9 +1378,7 @@ async function startServer() {
         console.warn('Postgres fetch reports error:', err);
       }
     }
-    const filtered = storeId
-      ? inMemoryStore.dailyClosingReports.filter((r) => matchStoreIdBackend(r.storeId, storeId))
-      : inMemoryStore.dailyClosingReports;
+    const filtered = storeId ? inMemoryStore.dailyClosingReports.filter((r) => !r.storeId || r.storeId === storeId) : inMemoryStore.dailyClosingReports;
     res.json(filtered);
   });
 
@@ -1793,17 +1415,17 @@ async function startServer() {
           console.error('Postgres save reports error:', dbErr);
         }
       }
-      const incoming = Array.isArray(req.body) ? req.body : [req.body];
-      incoming.forEach((r: any) => {
-        if (!r || !r.id) return;
+      if (Array.isArray(req.body)) {
+        inMemoryStore.dailyClosingReports = req.body;
+      } else {
+        const r = req.body;
         const idx = inMemoryStore.dailyClosingReports.findIndex((item) => item.id === r.id);
         if (idx >= 0) {
           inMemoryStore.dailyClosingReports[idx] = { ...inMemoryStore.dailyClosingReports[idx], ...r };
         } else {
           inMemoryStore.dailyClosingReports.unshift(r);
         }
-      });
-      persistStoreToDisk();
+      }
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
     } catch (err: any) {
@@ -1822,7 +1444,6 @@ async function startServer() {
         }
       }
       inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter((r) => r.id !== req.params.id);
-      persistStoreToDisk();
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
     } catch (err: any) {
@@ -1848,7 +1469,6 @@ async function startServer() {
           inMemoryStore.trainingFiles.unshift(f);
         }
       }
-      persistStoreToDisk();
       res.json({ success: true, files: inMemoryStore.trainingFiles });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1858,7 +1478,6 @@ async function startServer() {
   app.delete('/api/training-files/:id', (req, res) => {
     try {
       inMemoryStore.trainingFiles = inMemoryStore.trainingFiles.filter((f) => f.id !== req.params.id);
-      persistStoreToDisk();
       res.json({ success: true, files: inMemoryStore.trainingFiles });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1883,7 +1502,6 @@ async function startServer() {
           inMemoryStore.dailyTargets.push(c);
         }
       }
-      persistStoreToDisk();
       res.json({ success: true, configs: inMemoryStore.dailyTargets });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1895,7 +1513,7 @@ async function startServer() {
     const storeId = req.query.storeId as string;
     let records = inMemoryStore.salesTrainingDataset;
     if (storeId) {
-      records = records.filter((r: any) => matchStoreIdBackend(r.storeId, storeId));
+      records = records.filter((r: any) => !r.storeId || String(r.storeId) === String(storeId));
     }
     res.json({ success: true, dataset: records });
   });
@@ -1913,7 +1531,6 @@ async function startServer() {
           inMemoryStore.salesTrainingDataset.unshift(item);
         }
       }
-      persistStoreToDisk();
       res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1925,7 +1542,6 @@ async function startServer() {
       inMemoryStore.salesTrainingDataset = inMemoryStore.salesTrainingDataset.filter(
         (r: any) => r.id !== req.params.id
       );
-      persistStoreToDisk();
       res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1937,12 +1553,11 @@ async function startServer() {
       const storeId = req.query.storeId as string;
       if (storeId) {
         inMemoryStore.salesTrainingDataset = inMemoryStore.salesTrainingDataset.filter(
-          (r: any) => !matchStoreIdBackend(r.storeId, storeId)
+          (r: any) => r.storeId && String(r.storeId) !== String(storeId)
         );
       } else {
         inMemoryStore.salesTrainingDataset = [];
       }
-      persistStoreToDisk();
       res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2074,26 +1689,14 @@ async function startServer() {
     try {
       const p = getPool();
       if (p) {
-        await p.query('TRUNCATE TABLE thawing_items, fabrication_segments, stock_adjustments, closing_plan_records, daily_closing_reports, data_susut');
+        await p.query('TRUNCATE TABLE thawing_items, fabrication_segments, stock_adjustments, closing_plan_records, daily_closing_reports');
       }
       inMemoryStore.thawingItems = [];
       inMemoryStore.fabricationSegments = [];
       inMemoryStore.stockAdjustments = [];
       inMemoryStore.closingPlanRecords = [];
       inMemoryStore.dailyClosingReports = [];
-      inMemoryStore.dataSusut = [];
-      inMemoryStore.trainingFiles = [];
-      inMemoryStore.dailyTargets = [];
-      inMemoryStore.salesTrainingDataset = [];
-      inMemoryStore.pythonModels = [];
-
-      // Auto-reflect reset on Google Sheets backend if connected
-      syncAll8Tables().catch((e) => console.warn('[Reset] Sheets sync warning:', e));
-
-      res.json({
-        success: true,
-        message: 'Database transaksi berhasil dikosongkan. Master_COGS, Pengguna, dan Toko_Cabang tetap aman terjaga.'
-      });
+      res.json({ success: true, message: 'Database reset successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

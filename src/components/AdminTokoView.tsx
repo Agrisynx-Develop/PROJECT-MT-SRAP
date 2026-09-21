@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ThawingItem,
   FabricationSegment,
@@ -16,7 +16,6 @@ import SavedDataViewerModal from './SavedDataViewerModal';
 import { matchStoreEntity } from '../utils/reportCalculations';
 import { processHighResImage } from '../utils/imageCompressor';
 import { getDeterministicClosingRecordId, isMatchPlan } from '../utils/storeHelper';
-import { getPreviousDateStr, findHMinus1ClosingRecord } from '../utils/dateUtils';
 import {
   exportStoreDailyLaporanExcel,
   exportStoreDailyLaporanCSV,
@@ -133,11 +132,11 @@ export default function AdminTokoView({
     const datesSet = new Set<string>();
     (items || []).forEach((i) => {
       const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-      if (d) datesSet.add(d);
+      if (d && d !== '2026-08-29') datesSet.add(d);
     });
     (closingRecords || []).forEach((c) => {
       const d = (c.date || c.timestamp || '').split('T')[0];
-      if (d) datesSet.add(d);
+      if (d && d !== '2026-08-29') datesSet.add(d);
     });
     return Array.from(datesSet).sort().reverse();
   }, [items, closingRecords]);
@@ -172,59 +171,6 @@ export default function AdminTokoView({
   const [unifiedNotes, setUnifiedNotes] = useState('');
   const [editingClosingId, setEditingClosingId] = useState<string | null>(null);
   const [closingInputMsg, setClosingInputMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  // Active plan & H-1 record lookup (H-1 dari selectedDate)
-  const activePlanName = unifiedPlanSelect === 'CUSTOM' ? unifiedCustomPlan.trim() : unifiedPlanSelect;
-  const h1DateStr = useMemo(() => getPreviousDateStr(selectedDate), [selectedDate]);
-  const h1ClosingRec = useMemo(() => {
-    if (!activePlanName) return undefined;
-    return findHMinus1ClosingRecord(closingRecords || [], currentStore, activePlanName, selectedDate);
-  }, [closingRecords, currentStore, activePlanName, selectedDate]);
-
-  // Auto-sync sisa kemarin secara DIRECT & TERISOLASI per tanggal:
-  // Aturan Bisnis: Hanya data dari H-1 (tepat 1 hari kalender sebelum selectedDate)
-  // yang baru terhitung menjadi sisa kemarin / stock awal tanggal selectedDate.
-  // Jika H-1 belum diisi, sisa kemarin tetap 0 (tidak melompat dari H-2 atau H-3).
-  useEffect(() => {
-    if (editingClosingId) return;
-
-    const plan = unifiedPlanSelect === 'CUSTOM' ? unifiedCustomPlan.trim() : unifiedPlanSelect;
-    if (!plan) return;
-
-    // 1. Cek apakah tanggal terpilih sudah memiliki record closing
-    const existingForDate = (closingRecords || []).find(
-      (c) =>
-        matchStoreEntity(c.storeId, currentStore) &&
-        (c.date || c.timestamp || '').startsWith(selectedDate) &&
-        isMatchPlan(c.planName, plan)
-    );
-
-    if (existingForDate) {
-      // Jika record hari ini sisa kemarin-nya masih 0 tapi sekarang data H-1 sudah tersedia:
-      const effectiveOpening = (existingForDate.openingStockKg !== undefined && existingForDate.openingStockKg > 0)
-        ? existingForDate.openingStockKg
-        : (h1ClosingRec?.actualClosingStockKg !== undefined ? h1ClosingRec.actualClosingStockKg : (existingForDate.openingStockKg ?? 0));
-      setUnifiedSisaKemarin(String(effectiveOpening));
-      setUnifiedPenjualanSales(existingForDate.salesKg !== undefined ? String(existingForDate.salesKg) : '');
-      setUnifiedTimbanganSisaFisik(existingForDate.actualClosingStockKg !== undefined ? String(existingForDate.actualClosingStockKg) : '');
-      setUnifiedFotoClosing(existingForDate.photoUrl || '');
-      setUnifiedNotes(existingForDate.note || '');
-      return;
-    }
-
-    // 2. Direct isolation: Hanya jika hari tepat sebelumnya (selectedDate - 1, H-1) memiliki closing,
-    // sisa closing hari kemarin otomatis menjadi sisa kemarin hari ini.
-    if (h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number') {
-      setUnifiedSisaKemarin(String(h1ClosingRec.actualClosingStockKg));
-    } else {
-      setUnifiedSisaKemarin('0');
-    }
-
-    setUnifiedPenjualanSales('');
-    setUnifiedTimbanganSisaFisik('');
-    setUnifiedFotoClosing('');
-    setUnifiedNotes('');
-  }, [selectedDate, unifiedPlanSelect, unifiedCustomPlan, closingRecords, currentStore.id, editingClosingId, h1ClosingRec]);
 
   // Derived Live Calculations for Unified Form (Semua Otomatis Terisi)
   const totalTally = useMemo(() => {
@@ -486,17 +432,15 @@ export default function AdminTokoView({
       (b) => b.bahan.trim() || (parseFloat(b.tally) || 0) > 0 || (parseFloat(b.netto) || 0) > 0
     );
 
-    // Hanya hapus item lama jika pengguna secara eksplisit sedang meng-edit (bukan menambah bahan baru)
-    const previousUnifiedItemIds = editingClosingId
-      ? (items || [])
-          .filter(
-            (i) =>
-              matchStoreEntity(i.storeId, currentStore) &&
-              (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate) &&
-              isMatchPlan(i.plannedFabrication, effectivePlan)
-          )
-          .map((i) => i.id)
-      : [];
+    // If updating or re-saving, find previous unified items for this plan and clean them up
+    const previousUnifiedItemIds = (items || [])
+      .filter(
+        (i) =>
+          matchStoreEntity(i.storeId, currentStore) &&
+          (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate) &&
+          isMatchPlan(i.plannedFabrication, effectivePlan)
+      )
+      .map((i) => i.id);
 
     if (previousUnifiedItemIds.length > 0 && onDeleteItem) {
       previousUnifiedItemIds.forEach((id) => onDeleteItem(id));
@@ -711,19 +655,6 @@ export default function AdminTokoView({
       onSaveDailyReport(finalizedReport);
     }
     upsertRecordToSheets('daily_closing_reports', finalizedReport);
-
-    // Sync ke Sheet 8 (Data Susut)
-    const susutRecord = {
-      id: `susut_${currentStore.id}_${selectedDate}_${Date.now()}`,
-      date: selectedDate,
-      storeName: currentStore.name,
-      storeId: currentStore.id,
-      planName: effectivePlan,
-      susutProses: parseFloat(susutProsesKg.toFixed(3)),
-      susutJual: parseFloat(susutJualKg.toFixed(3)),
-      createdAt: new Date().toISOString(),
-    };
-    upsertRecordToSheets('data_susut', susutRecord);
 
     setClosingInputMsg({
       type: 'success',
@@ -1505,45 +1436,19 @@ export default function AdminTokoView({
               <div className="bg-slate-50/90 border border-slate-200 rounded-xl p-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
-                      <label className="block text-xs font-black text-slate-900 uppercase tracking-wide">
-                        Sisa Kemarin (Stok Awal) [Kg]
-                      </label>
-                      {h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number' ? (
-                        <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded border border-emerald-300">
-                          ✓ Dari H-1 ({h1DateStr}): {Number(h1ClosingRec.actualClosingStockKg).toFixed(3)} Kg
-                        </span>
-                      ) : (
-                        <span className="text-[10px] bg-slate-100 text-slate-600 font-medium px-2 py-0.5 rounded border border-slate-200">
-                          H-1 ({h1DateStr}) belum ada closing
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        type="number"
-                        step="0.001"
-                        placeholder="0.000"
-                        value={unifiedSisaKemarin}
-                        onChange={(e) => setUnifiedSisaKemarin(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500"
-                      />
-                      {h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number' && (
-                        <button
-                          type="button"
-                          onClick={() => setUnifiedSisaKemarin(String(h1ClosingRec.actualClosingStockKg))}
-                          className="px-2.5 py-2.5 text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl whitespace-nowrap transition cursor-pointer"
-                          title="Sinkronkan ulang dengan closing H-1"
-                        >
-                          Sync H-1
-                        </button>
-                      )}
-                    </div>
+                    <label className="block text-xs font-black text-slate-900 mb-1 uppercase tracking-wide">
+                      Sisa Kemarin (Stok Awal) [Kg]
+                    </label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      placeholder="0.000"
+                      value={unifiedSisaKemarin}
+                      onChange={(e) => setUnifiedSisaKemarin(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500"
+                    />
                     <p className="text-[10px] text-slate-500 mt-1">
-                      {h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number'
-                        ? `Data H-1 (${h1DateStr}) terhitung otomatis menjadi sisa kemarin hari ini.`
-                        : `Hanya data dari H-1 (${h1DateStr}) yang terhitung. Belum ada data = 0.000 Kg.`
-                      }
+                      Stok sisa display atau carryover dari hari kemarin.
                     </p>
                   </div>
 

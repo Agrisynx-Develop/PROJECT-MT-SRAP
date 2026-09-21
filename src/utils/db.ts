@@ -20,7 +20,6 @@ import {
   deleteRecordFromSheets,
   updateTableInSheets,
   getGoogleAppsScriptUrl,
-  initialize8Sheets,
   AllSheetsData
 } from './sheetsApi';
 import { normalizePlanName, getDeterministicClosingRecordId } from './storeHelper';
@@ -107,10 +106,9 @@ export function resolveUserFromInput(usernameInput: any): UserAccount {
     matchedStore = allStores[0];
   }
 
-  const codeLower = matchedStore?.code.toLowerCase() || 'ckr';
-  const storeName = matchedStore?.name || 'TDN CKR';
-  const storeId = matchedStore?.id || '1';
-  const partnerRole = role === 'butcher' ? 'admin' : 'butcher';
+  const codeLower = matchedStore?.code.toLowerCase() || 'ckt';
+  const storeName = matchedStore?.name || 'TDN Cikut';
+  const storeId = matchedStore?.id || 'store_ckt';
 
   return {
     id: `user_${role}_${codeLower}`,
@@ -119,40 +117,15 @@ export function resolveUserFromInput(usernameInput: any): UserAccount {
     storeId,
     storeName,
     fullName: `${role === 'butcher' ? 'Butcher' : 'Admin'} ${storeName}`,
-    linkedAccountId: `user_${partnerRole}_${codeLower}`,
     createdAt: new Date().toISOString(),
   };
 }
 
 // --- DATABASE SYNCHRONIZATION HELPERS ---
 
-export const DEFAULT_STORES: Store[] = [
-  { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' },
-  { id: '2', code: 'BKS', name: 'TDN BKS', city: 'Bekasi', createdAt: '2026-01-15' },
-  { id: '3', code: 'BDG', name: 'TDN BDG', city: 'Bandung', createdAt: '2026-02-01' },
-];
-
-export const DEFAULT_USERS: UserAccount[] = [
-  { id: '1', username: 'butcher_ckr', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher TDN CKR', linkedAccountId: '2', createdAt: '2026-01-01' },
-  { id: '2', username: 'admin_ckr', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin TDN CKR', linkedAccountId: '1', createdAt: '2026-01-01' },
-  { id: '3', username: 'md_pusat', role: 'md', storeId: undefined, storeName: undefined, fullName: 'Chief Merchandiser (MD Pusat)', createdAt: '2026-01-01' },
-  { id: '4', username: 'butcher_bks', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher TDN BKS', linkedAccountId: '5', createdAt: '2026-01-15' },
-  { id: '5', username: 'admin_bks', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin TDN BKS', linkedAccountId: '4', createdAt: '2026-01-15' },
-  { id: '6', username: 'butcher_bdg', role: 'butcher', storeId: '3', storeName: 'TDN BDG', fullName: 'Butcher TDN BDG', linkedAccountId: '7', createdAt: '2026-02-01' },
-  { id: '7', username: 'admin_bdg', role: 'admin', storeId: '3', storeName: 'TDN BDG', fullName: 'Admin TDN BDG', linkedAccountId: '6', createdAt: '2026-02-01' },
-];
-
 export const getStores = (): Store[] => {
   const data = localStorage.getItem('stores_list');
-  if (data) {
-    try {
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    } catch {
-      // Fallback
-    }
-  }
-  return DEFAULT_STORES;
+  return data ? JSON.parse(data) : [];
 };
 
 export const saveStores = (stores: Store[]) => {
@@ -165,15 +138,7 @@ export const saveStores = (stores: Store[]) => {
 
 export const getUsers = (): UserAccount[] => {
   const data = localStorage.getItem('users_list');
-  if (data) {
-    try {
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    } catch {
-      // Fallback
-    }
-  }
-  return DEFAULT_USERS;
+  return data ? JSON.parse(data) : [];
 };
 
 export const saveUsers = (users: UserAccount[]) => {
@@ -187,15 +152,19 @@ export const saveUsers = (users: UserAccount[]) => {
 export const getCurrentUser = (): UserAccount => {
   const data = localStorage.getItem('current_logged_user');
   if (!data) {
-    const defaultUser: UserAccount = DEFAULT_USERS[0];
+    const defaultUser: UserAccount = {
+      id: 'user_butcher_ckt',
+      username: 'butcher_ckt',
+      role: 'butcher',
+      storeId: 'store_ckt',
+      storeName: 'TDN Cikut',
+      fullName: 'Butcher TDN Cikut',
+      createdAt: '2026-01-01',
+    };
     localStorage.setItem('current_logged_user', JSON.stringify(defaultUser));
     return defaultUser;
   }
-  try {
-    return JSON.parse(data);
-  } catch {
-    return DEFAULT_USERS[0];
-  }
+  return JSON.parse(data);
 };
 
 export const setCurrentUser = (user: UserAccount) => {
@@ -305,18 +274,14 @@ export const getStockAdjustments = (): StockAdjustment[] => {
   return data ? JSON.parse(data) : [];
 };
 
-export const saveStockAdjustmentsLocally = (adjs: StockAdjustment[]) => {
-  safeSetItem('stock_adjustments', JSON.stringify(adjs));
-};
-
 export const saveStockAdjustments = (adjs: StockAdjustment[], updatedSingleAdj?: StockAdjustment) => {
   safeSetItem('stock_adjustments', JSON.stringify(adjs));
   postApiBackground('/api/adjustments', adjs);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleAdj) {
-      upsertRecordToSheets('Adjustment', updatedSingleAdj);
+      upsertRecordToSheets('Koreksi_Stok', updatedSingleAdj);
     } else {
-      updateTableInSheets('Adjustment', adjs);
+      updateTableInSheets('Koreksi_Stok', adjs);
     }
   }
 };
@@ -327,24 +292,29 @@ export const getClosingPlanRecords = (): ClosingPlanRecord[] => {
   try {
     const parsed = JSON.parse(data);
     if (!Array.isArray(parsed)) return [];
-    return parsed;
+    // Filter out unwanted test dates such as 2026-08-29
+    return parsed.filter((r) => {
+      const d = (r.date || r.timestamp || '').split('T')[0];
+      return d !== '2026-08-29';
+    });
   } catch {
     return [];
   }
 };
 
-export const saveClosingPlanRecordsLocally = (records: ClosingPlanRecord[]) => {
-  safeSetItem('closing_plan_records', JSON.stringify(records));
-};
-
 export const saveClosingPlanRecords = (records: ClosingPlanRecord[], updatedSingleRecord?: ClosingPlanRecord) => {
-  safeSetItem('closing_plan_records', JSON.stringify(records));
-  postApiBackground('/api/closing-records', records);
+  // Always sanitize before saving
+  const sanitized = records.filter((r) => {
+    const d = (r.date || r.timestamp || '').split('T')[0];
+    return d !== '2026-08-29';
+  });
+  safeSetItem('closing_plan_records', JSON.stringify(sanitized));
+  postApiBackground('/api/closing-records', sanitized);
   if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleRecord) {
-      upsertRecordToSheets('Closing_Rencana_Potong', updatedSingleRecord);
+    if (updatedSingleRecord && (updatedSingleRecord.date || updatedSingleRecord.timestamp || '').split('T')[0] !== '2026-08-29') {
+      upsertRecordToSheets('Closing_Fisik', updatedSingleRecord);
     } else {
-      updateTableInSheets('Closing_Rencana_Potong', records);
+      updateTableInSheets('Closing_Fisik', sanitized);
     }
   }
 };
@@ -355,16 +325,15 @@ export const deleteClosingPlanRecord = (id: string): ClosingPlanRecord[] => {
   safeSetItem('closing_plan_records', JSON.stringify(updated));
   fetch(`/api/closing-records/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Closing_Rencana_Potong', id);
+    deleteRecordFromSheets('Closing_Fisik', id);
   }
   return updated;
 };
 
 /**
- * Purge all records across all tables for a specific date
+ * Purge all records across all tables for a specific date (default: 2026-08-29)
  */
-export const purgeDateRecords = (dateToPurge: string) => {
-  if (!dateToPurge) return;
+export const purgeDateRecords = (dateToPurge: string = '2026-08-29') => {
   try {
     // 1. Closing Plan Records
     const closingKey = 'closing_plan_records';
@@ -463,31 +432,44 @@ export const purgeDateRecords = (dateToPurge: string) => {
   }
 };
 
+// Immediately execute purge of 2026-08-29 on module evaluation
+try {
+  purgeDateRecords('2026-08-29');
+} catch {
+  // ignore
+}
+
 
 export const deduplicateThawingItems = (rawItems: ThawingItem[]): ThawingItem[] => {
   if (!Array.isArray(rawItems)) return [];
-  const mapById = new Map<string, ThawingItem>();
+  const mapBySemantic = new Map<string, ThawingItem>();
 
   for (const item of rawItems) {
     if (!item) continue;
     const id = item.id || `meat_${Math.random().toString(36).substring(2, 8)}`;
+    const storeId = item.storeId || '1';
+    const datePart = (item.createdAt || item.thawingStartTime || '').split('T')[0] || 'nodate';
+    const nameNorm = (item.name || '').trim().toLowerCase();
+    const planNorm = (item.plannedFabrication || '').trim().toLowerCase();
+    const wBefore = (Number(item.weightBeforeThawing) || 0).toFixed(3);
+    const wAfter = (Number(item.weightAfterThawing !== null && item.weightAfterThawing !== undefined ? item.weightAfterThawing : item.weightBeforeThawing) || 0).toFixed(3);
     const hasPhoto = Boolean(item.image && item.image !== 'placeholder' && item.image.trim());
 
-    if (mapById.has(id)) {
-      const existing = mapById.get(id)!;
+    // Strict semantic signature: store + date + name + plan + tally + netto
+    const semKey = `${storeId}_${datePart}_${nameNorm}_${planNorm}_${wBefore}_${wAfter}`;
+
+    if (mapBySemantic.has(semKey)) {
+      const existing = mapBySemantic.get(semKey)!;
       const existingHasPhoto = Boolean(existing.image && existing.image !== 'placeholder' && existing.image.trim());
-      mapById.set(id, {
-        ...existing,
-        ...item,
-        id,
-        image: hasPhoto ? item.image : (existingHasPhoto ? existing.image : item.image),
-      });
+      if (hasPhoto && !existingHasPhoto) {
+        mapBySemantic.set(semKey, { ...item, id: existing.id || item.id });
+      }
     } else {
-      mapById.set(id, { ...item, id });
+      mapBySemantic.set(semKey, { ...item, id });
     }
   }
 
-  return Array.from(mapById.values());
+  return Array.from(mapBySemantic.values());
 };
 
 export const deduplicateDailyReports = (reports: DailyClosingReport[]): DailyClosingReport[] => {
@@ -523,27 +505,22 @@ export const getThawingItems = (): ThawingItem[] => {
   }
 };
 
-export const saveThawingItemsLocally = (items: ThawingItem[]) => {
-  const cleanItems = deduplicateThawingItems(items);
-  safeSetItem('thawing_items', JSON.stringify(cleanItems));
-};
-
 export const saveThawingItems = (items: ThawingItem[], updatedSingleItem?: ThawingItem) => {
   const cleanItems = deduplicateThawingItems(items);
   safeSetItem('thawing_items', JSON.stringify(cleanItems));
   postApiBackground('/api/thawing-items', cleanItems);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleItem) {
-      upsertRecordToSheets('Data_Thawing', updatedSingleItem);
+      upsertRecordToSheets('Thawing_Daging', updatedSingleItem);
     } else {
-      updateTableInSheets('Data_Thawing', cleanItems);
+      updateTableInSheets('Thawing_Daging', cleanItems);
     }
   }
 };
 
 export const deleteThawingItemFromCloud = (id: string) => {
   if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Data_Thawing', id);
+    deleteRecordFromSheets('Thawing_Daging', id);
   }
 };
 
@@ -552,18 +529,14 @@ export const getFabricationSegments = (): FabricationSegment[] => {
   return data ? JSON.parse(data) : [];
 };
 
-export const saveFabricationSegmentsLocally = (segments: FabricationSegment[]) => {
-  safeSetItem('fabrication_segments', JSON.stringify(segments));
-};
-
 export const saveFabricationSegments = (segments: FabricationSegment[], updatedSingleSegment?: FabricationSegment) => {
   safeSetItem('fabrication_segments', JSON.stringify(segments));
   postApiBackground('/api/fabrication-segments', segments);
   if (getGoogleAppsScriptUrl()) {
     if (updatedSingleSegment) {
-      upsertRecordToSheets('Data_Pabrikasi', updatedSingleSegment);
+      upsertRecordToSheets('Pabrikasi_Segmen', updatedSingleSegment);
     } else {
-      updateTableInSheets('Data_Pabrikasi', segments);
+      updateTableInSheets('Pabrikasi_Segmen', segments);
     }
   }
 };
@@ -574,7 +547,7 @@ export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
   safeSetItem('fabrication_segments', JSON.stringify(updated));
   fetch(`/api/fabrication-segments/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Data_Pabrikasi', id);
+    deleteRecordFromSheets('Pabrikasi_Segmen', id);
   }
   return updated;
 };
@@ -582,10 +555,6 @@ export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
 export const getDailyReports = (): DailyClosingReport[] => {
   const data = localStorage.getItem('daily_reports');
   return data ? JSON.parse(data) : [];
-};
-
-export const saveDailyReportsLocally = (reports: DailyClosingReport[]) => {
-  safeSetItem('daily_reports', JSON.stringify(reports));
 };
 
 export const saveDailyReports = (reports: DailyClosingReport[], updatedSingleReport?: DailyClosingReport) => {
@@ -622,31 +591,15 @@ export const saveLossConfig = (config: LossAlertConfig) => {
 };
 
 export const resetDatabase = async () => {
-  // Wipe all transaction / input stores
   localStorage.removeItem('thawing_items');
   localStorage.removeItem('fabrication_segments');
   localStorage.removeItem('stock_adjustments');
   localStorage.removeItem('closing_plan_records');
   localStorage.removeItem('daily_reports');
-  localStorage.removeItem('data_susut');
-  localStorage.removeItem('training_files_records');
-  localStorage.removeItem('sales_training_dataset');
-  localStorage.removeItem('python_ml_models');
-
-  // Trigger server-side truncate
   try {
     await fetch('/api/database/reset', { method: 'POST' });
   } catch {
     // ignore
-  }
-
-  // Trigger Google Sheets reset if connected (preserves Master_COGS and Pengguna)
-  if (getGoogleAppsScriptUrl()) {
-    try {
-      await initialize8Sheets(true);
-    } catch {
-      // ignore
-    }
   }
 };
 
@@ -702,7 +655,9 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
     // 4. Thawing Items / Bahan Baku Masuk (Defensive Smart Merge: NEVER duplicate items!)
     const currentLocalItems = getThawingItems();
     const candidateItems = [...(d.thawingItems || []), ...currentLocalItems];
-    const mergedItems = deduplicateThawingItems(candidateItems);
+    const mergedItems = deduplicateThawingItems(candidateItems).filter(
+      (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'
+    );
     safeSetItem('thawing_items', JSON.stringify(mergedItems));
     d.thawingItems = mergedItems;
 
@@ -736,7 +691,7 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
 
     // Index cloud closing records
     (d.closingPlanRecords || []).forEach((c) => {
-      if (c) {
+      if (c && (c.date || c.timestamp || '').split('T')[0] !== '2026-08-29') {
         const key = c.id || makeClosingKey(c);
         closingMap.set(key, c);
       }
@@ -744,7 +699,7 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
 
     // Merge with local records
     currentLocalClosing.forEach((loc) => {
-      if (!loc) return;
+      if (!loc || (loc.date || loc.timestamp || '').split('T')[0] === '2026-08-29') return;
       const keyById = loc.id;
       const keyByProp = makeClosingKey(loc);
       let foundKey: string | undefined = undefined;
@@ -779,13 +734,17 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
       }
     });
 
-    const mergedClosing = Array.from(closingMap.values());
+    const mergedClosing = Array.from(closingMap.values()).filter(
+      (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
+    );
     safeSetItem('closing_plan_records', JSON.stringify(mergedClosing));
     d.closingPlanRecords = mergedClosing;
 
     // 7. Daily Closing Reports (Rekap Harian)
     const currentLocalReports = getDailyReports();
-    const candidateReports = [...(d.dailyClosingReports || []), ...currentLocalReports];
+    const candidateReports = [...(d.dailyClosingReports || []), ...currentLocalReports].filter(
+      (r) => r && r.date && r.date.split('T')[0] !== '2026-08-29'
+    );
     const mergedReports = deduplicateDailyReports(candidateReports);
     safeSetItem('daily_reports', JSON.stringify(mergedReports));
     d.dailyClosingReports = mergedReports;
@@ -802,7 +761,9 @@ export const pullAllDataFromGoogleSheets = async (): Promise<{
         adjMap.set(String(loc.id), loc);
       }
     });
-    const mergedAdjs = Array.from(adjMap.values());
+    const mergedAdjs = Array.from(adjMap.values()).filter(
+      (a) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'
+    );
     safeSetItem('stock_adjustments', JSON.stringify(mergedAdjs));
     d.stockAdjustments = mergedAdjs;
 

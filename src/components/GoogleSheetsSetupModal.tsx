@@ -5,12 +5,8 @@ import {
   testAppsScriptConnection,
   fetchAllDataFromSheets,
   pushAllDataToSheets,
-  initialize8Sheets,
-  getLastSyncTime,
-  cleanAppsScriptUrl,
-  validateAppsScriptUrl
+  getLastSyncTime
 } from '../utils/sheetsApi';
-import { resetDatabase } from '../utils/db';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../utils/googleAppsScriptCode';
 import { AllSheetsData } from '../utils/sheetsApi';
 import {
@@ -29,8 +25,6 @@ import {
   Info,
   Layers,
   Sparkles,
-  Trash2,
-  Table,
   X
 } from 'lucide-react';
 
@@ -53,7 +47,6 @@ export default function GoogleSheetsSetupModal({
     success: boolean;
     message: string;
     spreadsheetName?: string;
-    spreadsheetId?: string;
   } | null>(null);
 
   const [isPulling, setIsPulling] = useState(false);
@@ -63,7 +56,6 @@ export default function GoogleSheetsSetupModal({
   const [hasCopiedUrl, setHasCopiedUrl] = useState(false);
   const [activeTab, setActiveTab] = useState<'status' | 'code' | 'guide'>('status');
   const [lastSync, setLastSync] = useState<string | null>(null);
-  const [isInitializing, setIsInitializing] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -80,30 +72,10 @@ export default function GoogleSheetsSetupModal({
   if (!isOpen) return null;
 
   const handleSaveUrl = () => {
-    const raw = urlInput.trim();
-    if (!raw) {
-      setGoogleAppsScriptUrl('');
-      setUrlInput('');
-      setTestResult(null);
-      setActionNotice('URL Google Apps Script telah dikosongkan.');
-      onDataSynced();
-      return;
-    }
-
-    const val = validateAppsScriptUrl(raw);
-    if (!val.isValid) {
-      setTestResult({
-        success: false,
-        message: val.error || 'Format URL tidak valid.'
-      });
-      return;
-    }
-
-    const clean = val.cleanedUrl!;
-    setGoogleAppsScriptUrl(clean);
-    setUrlInput(clean);
-    setActionNotice('✅ URL Google Apps Script disimpan & disinkronkan ke seluruh sistem!');
-    handleTestConnection(clean);
+    setGoogleAppsScriptUrl(urlInput);
+    setActionNotice('URL Google Apps Script berhasil disimpan di perangkat ini.');
+    handleTestConnection(urlInput);
+    setTimeout(() => setActionNotice(null), 3000);
   };
 
   const handleTestConnection = async (testUrlToUse?: string) => {
@@ -111,16 +83,7 @@ export default function GoogleSheetsSetupModal({
     if (!targetUrl) {
       setTestResult({
         success: false,
-        message: 'Masukkan URL Web App Google Apps Script (harus berakhiran /exec).'
-      });
-      return;
-    }
-
-    const val = validateAppsScriptUrl(targetUrl);
-    if (!val.isValid) {
-      setTestResult({
-        success: false,
-        message: val.error || 'URL tidak valid.'
+        message: 'Masukkan URL Google Apps Script terlebih dahulu.'
       });
       return;
     }
@@ -128,15 +91,8 @@ export default function GoogleSheetsSetupModal({
     setIsTesting(true);
     setTestResult(null);
     try {
-      const res = await testAppsScriptConnection(val.cleanedUrl);
+      const res = await testAppsScriptConnection(targetUrl);
       setTestResult(res);
-      if (res.success) {
-        if (res.normalizedUrl) {
-          setUrlInput(res.normalizedUrl);
-        }
-        setActionNotice('✅ Berhasil terhubung ke Google Spreadsheet!');
-        onDataSynced();
-      }
     } catch (err: any) {
       setTestResult({
         success: false,
@@ -144,7 +100,6 @@ export default function GoogleSheetsSetupModal({
       });
     } finally {
       setIsTesting(false);
-      setTimeout(() => setActionNotice(null), 4000);
     }
   };
 
@@ -193,47 +148,6 @@ export default function GoogleSheetsSetupModal({
     } finally {
       setIsPushing(false);
       setTimeout(() => setActionNotice(null), 4000);
-    }
-  };
-
-  const handleInit8Sheets = async () => {
-    setIsInitializing(true);
-    setActionNotice(null);
-    try {
-      const ok = await initialize8Sheets(false);
-      if (ok) {
-        setActionNotice('✅ 8 Sheet Database berhasil diinisialisasi sesuai spesifikasi.');
-      } else {
-        setActionNotice('❌ Gagal menginisialisasi 8 Sheet. Pastikan URL Apps Script sudah benar.');
-      }
-    } catch (err: any) {
-      setActionNotice(`❌ Error: ${err.message}`);
-    } finally {
-      setIsInitializing(false);
-      setTimeout(() => setActionNotice(null), 4000);
-    }
-  };
-
-  const handleResetAllTransactions = async () => {
-    if (
-      !window.confirm(
-        'PERINGATAN: Anda akan menghapus semua data transaksi input & dummy (Thawing, Pabrikasi, Closing, Koreksi, Susut).\n\nData Master_COGS, Pengguna, dan Toko_Cabang akan TETAP AMAN TERJAGA.\n\nLanjutkan?'
-      )
-    ) {
-      return;
-    }
-
-    setIsInitializing(true);
-    setActionNotice(null);
-    try {
-      await resetDatabase();
-      onDataSynced();
-      setActionNotice('✅ Seluruh data transaksi & dummy berhasil dihapus! Master_COGS dan Pengguna tetap aman terjaga.');
-    } catch (err: any) {
-      setActionNotice(`❌ Error reset: ${err.message}`);
-    } finally {
-      setIsInitializing(false);
-      setTimeout(() => setActionNotice(null), 5000);
     }
   };
 
@@ -463,7 +377,7 @@ export default function GoogleSheetsSetupModal({
                   <button
                     id="btn-pull-sheets-data"
                     onClick={handlePullData}
-                    disabled={isPulling || isPushing || isInitializing}
+                    disabled={isPulling || isPushing}
                     className="p-3 bg-white hover:bg-slate-100 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
                   >
                     <Download className={`w-4 h-4 text-emerald-600 ${isPulling ? 'animate-bounce' : ''}`} />
@@ -473,49 +387,11 @@ export default function GoogleSheetsSetupModal({
                   <button
                     id="btn-push-sheets-data"
                     onClick={handlePushData}
-                    disabled={isPulling || isPushing || isInitializing}
+                    disabled={isPulling || isPushing}
                     className="p-3 bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
                   >
                     <Upload className={`w-4 h-4 text-teal-600 ${isPushing ? 'animate-bounce' : ''}`} />
                     {isPushing ? 'Mengunggah...' : 'Unggah Data Lokal ke Spreadsheet (POST)'}
-                  </button>
-                </div>
-              </div>
-
-              {/* 8-Sheet Database Structure & Maintenance Controls */}
-              <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
-                    <Table className="w-4 h-4 text-amber-700" />
-                    Manajemen Database 8-Sheet & Reset
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-semibold">
-                    Struktur Resmi 8-Sheet
-                  </span>
-                </div>
-                <p className="text-[11px] text-amber-800 leading-relaxed">
-                  Pastikan 8 sheet database (Data_Thawing, Data_Pabrikasi, Closing_Rencana_Potong, Pengguna, Toko_Cabang, Master_COGS, Adjustment, Data_Susut) terformat rapi sesuai kolom baku. Anda juga dapat mengosongkan seluruh data input transaksi tanpa menghapus Master COGS & Pengguna.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                  <button
-                    id="btn-init-8-sheets"
-                    onClick={handleInit8Sheets}
-                    disabled={isInitializing || !urlInput.trim()}
-                    className="p-3 bg-white hover:bg-amber-50 border border-amber-300 text-amber-900 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
-                  >
-                    <Layers className={`w-4 h-4 text-amber-700 ${isInitializing ? 'animate-spin' : ''}`} />
-                    Format & Siapkan 8 Sheet
-                  </button>
-
-                  <button
-                    id="btn-reset-transactions"
-                    onClick={handleResetAllTransactions}
-                    disabled={isInitializing}
-                    className="p-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50"
-                  >
-                    <Trash2 className="w-4 h-4 text-white" />
-                    Kosongkan Data Input (Kecuali COGS & User)
                   </button>
                 </div>
               </div>
