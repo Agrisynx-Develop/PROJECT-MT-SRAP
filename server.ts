@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import pg from 'pg';
@@ -17,7 +18,7 @@ let pool: pg.Pool | null = null;
 
 function getPool(): pg.Pool | null {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
+  if (!dbUrl || !dbUrl.trim()) {
     return null;
   }
   if (!pool) {
@@ -92,6 +93,94 @@ const inMemoryStore = {
     salesPredictionKg: 40.0,
   }
 };
+
+// ----------------- LOCAL DISK PERSISTENCE FOR IN-MEMORY DATA ENGINE -----------------
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'local_database.json');
+
+function loadLocalStoreFromDisk() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(DB_FILE)) {
+      const content = fs.readFileSync(DB_FILE, 'utf-8');
+      const loaded = JSON.parse(content);
+      if (loaded && typeof loaded === 'object') {
+        if (Array.isArray(loaded.stores) && loaded.stores.length > 0) inMemoryStore.stores = loaded.stores;
+        if (Array.isArray(loaded.users) && loaded.users.length > 0) inMemoryStore.users = loaded.users;
+        if (Array.isArray(loaded.cogsMaster) && loaded.cogsMaster.length > 0) inMemoryStore.cogsMaster = loaded.cogsMaster;
+        if (Array.isArray(loaded.thawingItems)) inMemoryStore.thawingItems = loaded.thawingItems;
+        if (Array.isArray(loaded.fabricationSegments)) inMemoryStore.fabricationSegments = loaded.fabricationSegments;
+        if (Array.isArray(loaded.stockAdjustments)) inMemoryStore.stockAdjustments = loaded.stockAdjustments;
+        if (Array.isArray(loaded.closingPlanRecords)) inMemoryStore.closingPlanRecords = loaded.closingPlanRecords;
+        if (Array.isArray(loaded.dataSusut)) inMemoryStore.dataSusut = loaded.dataSusut;
+        if (Array.isArray(loaded.dailyClosingReports)) inMemoryStore.dailyClosingReports = loaded.dailyClosingReports;
+        if (Array.isArray(loaded.trainingFiles)) inMemoryStore.trainingFiles = loaded.trainingFiles;
+        if (Array.isArray(loaded.dailyTargets)) inMemoryStore.dailyTargets = loaded.dailyTargets;
+        if (Array.isArray(loaded.salesTrainingDataset)) inMemoryStore.salesTrainingDataset = loaded.salesTrainingDataset;
+        if (loaded.salesPredictionConfigs) inMemoryStore.salesPredictionConfigs = loaded.salesPredictionConfigs;
+        if (Array.isArray(loaded.pythonModels)) inMemoryStore.pythonModels = loaded.pythonModels;
+        if (loaded.lossConfig) inMemoryStore.lossConfig = loaded.lossConfig;
+        console.log(`[Storage] Loaded persisted database: ${inMemoryStore.thawingItems.length} thawing items, ${inMemoryStore.closingPlanRecords.length} closing records, ${inMemoryStore.dailyClosingReports.length} reports`);
+      }
+    }
+  } catch (err) {
+    console.error('[Storage] Error reading local store from disk:', err);
+  }
+}
+
+let persistTimeout: NodeJS.Timeout | null = null;
+function persistStoreToDisk() {
+  if (persistTimeout) clearTimeout(persistTimeout);
+  persistTimeout = setTimeout(() => {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const tmpFile = `${DB_FILE}.tmp`;
+      fs.writeFileSync(tmpFile, JSON.stringify(inMemoryStore, null, 2), 'utf-8');
+      fs.renameSync(tmpFile, DB_FILE);
+    } catch (err) {
+      console.error('[Storage] Error persisting local store to disk:', err);
+    }
+  }, 100);
+}
+
+// Store matching helper handling all alias forms symmetrically
+function matchStoreIdBackend(entityStoreId: any, targetStoreId: any): boolean {
+  if (!targetStoreId) return true;
+  if (!entityStoreId) return true;
+  const e = String(entityStoreId).toLowerCase().trim();
+  const t = String(targetStoreId).toLowerCase().trim();
+  if (e === t) return true;
+
+  const isCkr = (s: string) => s === '1' || s === 'store_ckr' || s === 'ckr' || s === 'store_ckt' || s === 'ckt' || s.includes('ckr') || s.includes('cikarang');
+  if (isCkr(e) && isCkr(t)) return true;
+
+  const isBks = (s: string) => s === '2' || s === 'store_bks' || s === 'bks' || s.includes('bekasi');
+  if (isBks(e) && isBks(t)) return true;
+
+  const isBdg = (s: string) => s === '3' || s === 'store_bdg' || s === 'bdg' || s.includes('bandung');
+  if (isBdg(e) && isBdg(t)) return true;
+
+  return false;
+}
+
+function getStoreIdVariants(storeId?: string): string[] {
+  if (!storeId) return [];
+  const s = String(storeId).toLowerCase().trim();
+  if (s === '1' || s === 'store_ckr' || s === 'ckr' || s === 'store_ckt' || s === 'ckt' || s.includes('ckr') || s.includes('cikarang')) {
+    return ['1', 'store_ckr', 'ckr', 'CKR', 'store_ckt', 'TDN CKR'];
+  }
+  if (s === '2' || s === 'store_bks' || s === 'bks' || s.includes('bekasi')) {
+    return ['2', 'store_bks', 'bks', 'BKS', 'TDN BKS'];
+  }
+  if (s === '3' || s === 'store_bdg' || s === 'bdg' || s.includes('bandung')) {
+    return ['3', 'store_bdg', 'bdg', 'BDG', 'TDN BDG'];
+  }
+  return [storeId];
+}
 
 // Database Schema Initializer for PostgreSQL (DATABASE_URL)
 async function initDatabaseTables() {
@@ -342,6 +431,9 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+  // Load persisted store from disk
+  loadLocalStoreFromDisk();
+
   // Initialize DB tables asynchronously
   initDatabaseTables();
 
@@ -535,7 +627,12 @@ async function startServer() {
       const susut = clean.shrinkageThawing !== undefined && clean.shrinkageThawing !== null ? Number(clean.shrinkageThawing) : Math.max(0, wBefore - wAfter);
 
       return {
+        'id': String(clean.id || ''),
+        'id toko': String(clean.storeId || '1'),
+        'nama toko': clean.storeName || 'TDN CKR',
         'nama bahan': clean.name || clean['nama bahan'] || '',
+        'kategori': clean.category || clean.pabrikasiCategory || clean['kategori'] || 'DAGING FRESH',
+        'rencana pabrikasi': clean.plannedFabrication || clean['rencana pabrikasi'] || '',
         'tanggal': (clean.createdAt || clean.thawingStartTime || new Date().toISOString()).split('T')[0],
         'berat sebelum thawing': wBefore,
         'berat setelah thawing': wAfter,
@@ -543,11 +640,17 @@ async function startServer() {
         'susut proses': parseFloat(susut.toFixed(3)),
         'durasi thawing': `${durMinutes} menit`,
         'status': clean.status || 'thawing',
+        'waktu mulai': startT,
+        'petugas butcher': clean.butcherName || clean['petugas butcher'] || 'Butcher',
       };
     }
 
     if (table === 'Data_Pabrikasi' || table === 'Pabrikasi_Segmen' || table === 'fabrication_segments') {
       return {
+        'id': String(clean.id || ''),
+        'id item': String(clean.itemId || ''),
+        'id toko': String(clean.storeId || '1'),
+        'nama toko': clean.storeName || 'TDN CKR',
         'nama bahan': clean.itemName || clean.name || clean['nama bahan'] || '',
         'tanggal': (clean.createdAt || clean.transferTimestamp || new Date().toISOString()).split('T')[0],
         'kategori': clean.category || clean.pabrikasiCategory || clean['kategori'] || 'DAGING FRESH',
@@ -555,13 +658,19 @@ async function startServer() {
         'daftar segmen hasil potongan': clean.segmentName || clean['daftar segmen hasil potongan'] || '',
         'Tujuan': clean.openingPurpose || clean['Tujuan'] || 'UNTUK DISPLAY',
         'berat rencana pabrikasi': Number(clean.actualWeight || clean.targetWeight) || 0,
+        'susut pabrikasi': Number(clean.periodicShrinkage) || 0,
+        'foto': clean.photoUrl || clean['foto'] || 'Foto Kamera Terlampir',
       };
     }
 
     if (table === 'Closing_Rencana_Potong' || table === 'Closing_Fisik' || table === 'closing_plan_records') {
       return {
+        'id': String(clean.id || ''),
         'tanggal': clean.date || (clean.timestamp ? clean.timestamp.split('T')[0] : new Date().toISOString().split('T')[0]),
+        'nama toko': clean.storeName || 'TDN CKR',
+        'id toko': String(clean.storeId || '1'),
         'nama bahan': clean.planName || clean.name || clean['nama bahan'] || '',
+        'kategori': clean.category || clean.pabrikasiCategory || 'DAGING FRESH',
         'sisa kemarin': Number(clean.openingStockKg !== undefined ? clean.openingStockKg : clean['sisa kemarin']) || 0,
         'diolah baru': Number(clean.newProcessedKg !== undefined ? clean.newProcessedKg : clean['diolah baru']) || 0,
         'sales real': Number(clean.salesKg !== undefined ? clean.salesKg : clean['sales real']) || 0,
@@ -570,6 +679,7 @@ async function startServer() {
         'susut jual': Number(clean.susutJualKg !== undefined ? clean.susutJualKg : clean['susut jual']) || 0,
         'status': clean.status || 'SELESAI',
         'catatan': clean.note || clean['catatan'] || '-',
+        'petugas butcher': clean.butcherName || clean['petugas butcher'] || 'Butcher',
       };
     }
 
@@ -659,18 +769,18 @@ async function startServer() {
   };
 
   const TABLE_SCHEMA_HEADERS: Record<string, string[]> = {
-    'Data_Thawing': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
-    'Data_Pabrikasi': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
-    'Closing_Rencana_Potong': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
+    'Data_Thawing': ['id', 'id toko', 'nama toko', 'nama bahan', 'kategori', 'rencana pabrikasi', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status', 'waktu mulai', 'petugas butcher'],
+    'Data_Pabrikasi': ['id', 'id item', 'id toko', 'nama toko', 'nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi', 'susut pabrikasi', 'foto'],
+    'Closing_Rencana_Potong': ['id', 'tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
     'Pengguna': ['id', 'user name', 'role', 'full name', 'store id', 'store name', 'created at'],
     'Toko_Cabang': ['id', 'code', 'name', 'city', 'created at'],
     'Master_COGS': ['id', 'item code', 'item name', 'plan name', 'cogs per kg', 'selling price', 'kategori', 'updated at', 'updated by'],
     'Adjustment': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
     'Data_Susut': ['tanggal', 'nama toko', 'id toko', 'rencana potong', 'susut proses', 'susut jual'],
     // Backward compatibility aliases
-    'Thawing_Daging': ['nama bahan', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status'],
-    'Pabrikasi_Segmen': ['nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi'],
-    'Closing_Fisik': ['tanggal', 'nama bahan', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan'],
+    'Thawing_Daging': ['id', 'id toko', 'nama toko', 'nama bahan', 'kategori', 'rencana pabrikasi', 'tanggal', 'berat sebelum thawing', 'berat setelah thawing', 'foto', 'susut proses', 'durasi thawing', 'status', 'waktu mulai', 'petugas butcher'],
+    'Pabrikasi_Segmen': ['id', 'id item', 'id toko', 'nama toko', 'nama bahan', 'tanggal', 'kategori', 'rencana pabrikasi', 'daftar segmen hasil potongan', 'Tujuan', 'berat rencana pabrikasi', 'susut pabrikasi', 'foto'],
+    'Closing_Fisik': ['id', 'tanggal', 'nama toko', 'id toko', 'nama bahan', 'kategori', 'sisa kemarin', 'diolah baru', 'sales real', 'timbangan sisa stok akhir', 'foto timbangan', 'susut jual', 'status', 'catatan', 'petugas butcher'],
     'Koreksi_Stok': ['tanggal', 'nama toko', 'id toko', 'jenis', 'rencana potong', 'berat', 'alasan'],
     'Laporan_Closing': ['id', 'storeId', 'storeName', 'date', 'totalWeightRaw', 'totalWeightAfterThawing', 'totalWeightFabricated', 'totalPeriodicShrinkage', 'totalSales', 'totalEndStock', 'thawingLossPercent', 'fabricationLossPercent', 'salesLossPercent', 'overallLossPercent', 'statusAlert', 'closingPhotoUrl', 'butcherName', 'createdAt'],
   };
@@ -1048,8 +1158,9 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          query += ` WHERE store_id = $1`;
-          params.push(storeId);
+          const variants = getStoreIdVariants(storeId);
+          query += ` WHERE store_id = ANY($1)`;
+          params.push(variants);
         }
         query += ` ORDER BY created_at DESC`;
         const result = await p.query(query, params);
@@ -1058,7 +1169,9 @@ async function startServer() {
         console.warn('Postgres fetch thawing items error:', err);
       }
     }
-    const filtered = storeId ? inMemoryStore.thawingItems.filter((i) => !i.storeId || i.storeId === storeId) : inMemoryStore.thawingItems;
+    const filtered = storeId
+      ? inMemoryStore.thawingItems.filter((i) => matchStoreIdBackend(i.storeId, storeId))
+      : inMemoryStore.thawingItems;
     res.json(filtered);
   });
 
@@ -1108,6 +1221,7 @@ async function startServer() {
           inMemoryStore.thawingItems.unshift(item);
         }
       });
+      persistStoreToDisk();
       syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
       res.json({ success: true, items: inMemoryStore.thawingItems });
     } catch (err: any) {
@@ -1122,6 +1236,7 @@ async function startServer() {
         await p.query('DELETE FROM thawing_items WHERE id = $1', [req.params.id]);
       }
       inMemoryStore.thawingItems = inMemoryStore.thawingItems.filter((i) => i.id !== req.params.id);
+      persistStoreToDisk();
       syncToSheetsBackend('Data_Thawing', inMemoryStore.thawingItems);
       res.json({ success: true });
     } catch (err: any) {
@@ -1147,8 +1262,9 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          query += ` WHERE store_id = $1`;
-          params.push(storeId);
+          const variants = getStoreIdVariants(storeId);
+          query += ` WHERE store_id = ANY($1)`;
+          params.push(variants);
         }
         query += ` ORDER BY created_at DESC`;
         const result = await p.query(query, params);
@@ -1157,7 +1273,9 @@ async function startServer() {
         console.warn('Postgres fetch fabrication segments error:', err);
       }
     }
-    const filtered = storeId ? inMemoryStore.fabricationSegments.filter((s) => !s.storeId || s.storeId === storeId) : inMemoryStore.fabricationSegments;
+    const filtered = storeId
+      ? inMemoryStore.fabricationSegments.filter((s) => matchStoreIdBackend(s.storeId, storeId))
+      : inMemoryStore.fabricationSegments;
     res.json(filtered);
   });
 
@@ -1200,6 +1318,7 @@ async function startServer() {
           inMemoryStore.fabricationSegments.unshift(seg);
         }
       });
+      persistStoreToDisk();
       syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
@@ -1218,6 +1337,7 @@ async function startServer() {
         }
       }
       inMemoryStore.fabricationSegments = inMemoryStore.fabricationSegments.filter((s) => s.id !== req.params.id);
+      persistStoreToDisk();
       syncToSheetsBackend('Data_Pabrikasi', inMemoryStore.fabricationSegments);
       res.json({ success: true, segments: inMemoryStore.fabricationSegments });
     } catch (err: any) {
@@ -1239,8 +1359,9 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          query += ` WHERE store_id = $1`;
-          params.push(storeId);
+          const variants = getStoreIdVariants(storeId);
+          query += ` WHERE store_id = ANY($1)`;
+          params.push(variants);
         }
         query += ` ORDER BY created_at DESC`;
         const result = await p.query(query, params);
@@ -1249,7 +1370,7 @@ async function startServer() {
         console.warn('Postgres fetch adjustments error:', err);
       }
     }
-    const filtered = storeId ? inMemoryStore.stockAdjustments.filter((a) => !a.storeId || a.storeId === storeId) : inMemoryStore.stockAdjustments;
+    const filtered = storeId ? inMemoryStore.stockAdjustments.filter((a) => matchStoreIdBackend(a.storeId, storeId)) : inMemoryStore.stockAdjustments;
     res.json(filtered);
   });
 
@@ -1281,6 +1402,7 @@ async function startServer() {
           inMemoryStore.stockAdjustments.unshift(a);
         }
       });
+      persistStoreToDisk();
       syncToSheetsBackend('Adjustment', inMemoryStore.stockAdjustments);
       res.json({ success: true, adjustments: inMemoryStore.stockAdjustments });
     } catch (err: any) {
@@ -1314,8 +1436,9 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          query += ` WHERE store_id = $1`;
-          params.push(storeId);
+          const variants = getStoreIdVariants(storeId);
+          query += ` WHERE store_id = ANY($1)`;
+          params.push(variants);
         }
         query += ` ORDER BY timestamp DESC`;
         const result = await p.query(query, params);
@@ -1327,16 +1450,7 @@ async function startServer() {
       }
     }
     const filtered = storeId
-      ? inMemoryStore.closingPlanRecords.filter((r) => {
-          if (!r.storeId) return true;
-          if (r.storeId === storeId) return true;
-          const s1 = String(r.storeId).toLowerCase();
-          const s2 = String(storeId).toLowerCase();
-          return (
-            (s1 === '1' || s1 === 'store_ckr' || s1 === 'ckr') &&
-            (s2 === '1' || s2 === 'store_ckr' || s2 === 'ckr')
-          );
-        })
+      ? inMemoryStore.closingPlanRecords.filter((r) => matchStoreIdBackend(r.storeId, storeId))
       : inMemoryStore.closingPlanRecords;
     res.json(filtered);
   });
@@ -1392,15 +1506,11 @@ async function startServer() {
         if (!r) return;
         const rPlan = (r.planName || '').toLowerCase().trim();
         const rDate = (r.date || '').split('T')[0];
-        const rStore = String(r.storeId || '').toLowerCase().trim();
         const idx = inMemoryStore.closingPlanRecords.findIndex((item: any) => {
           if (r.id && item.id && item.id === r.id) return true;
           const iPlan = (item.planName || '').toLowerCase().trim();
           const iDate = (item.date || '').split('T')[0];
-          const iStore = String(item.storeId || '').toLowerCase().trim();
-          const storeMatches = !iStore || !rStore || iStore === rStore ||
-            (iStore === '1' && (rStore === 'store_ckr' || rStore === 'ckr')) ||
-            ((iStore === 'store_ckr' || iStore === 'ckr') && rStore === '1');
+          const storeMatches = matchStoreIdBackend(item.storeId, r.storeId);
           return iPlan && rPlan && iPlan === rPlan && (!iDate || !rDate || iDate === rDate) && storeMatches;
         });
         if (idx >= 0) {
@@ -1409,6 +1519,7 @@ async function startServer() {
           inMemoryStore.closingPlanRecords.unshift(r);
         }
       });
+      persistStoreToDisk();
       syncToSheetsBackend('Closing_Rencana_Potong', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
     } catch (err: any) {
@@ -1427,6 +1538,7 @@ async function startServer() {
         }
       }
       inMemoryStore.closingPlanRecords = inMemoryStore.closingPlanRecords.filter((r) => r.id !== req.params.id);
+      persistStoreToDisk();
       syncToSheetsBackend('Closing_Rencana_Potong', inMemoryStore.closingPlanRecords);
       res.json({ success: true, records: inMemoryStore.closingPlanRecords });
     } catch (err: any) {
@@ -1450,8 +1562,9 @@ async function startServer() {
         const params: any[] = [];
         const conds: string[] = [];
         if (storeId) {
-          conds.push(`store_id = $${params.length + 1}`);
-          params.push(storeId);
+          const variants = getStoreIdVariants(storeId);
+          conds.push(`store_id = ANY($${params.length + 1})`);
+          params.push(variants);
         }
         if (date) {
           conds.push(`date = $${params.length + 1}`);
@@ -1471,7 +1584,7 @@ async function startServer() {
     }
     let filtered = inMemoryStore.dataSusut;
     if (storeId) {
-      filtered = filtered.filter((s) => !s.storeId || s.storeId === storeId);
+      filtered = filtered.filter((s) => matchStoreIdBackend(s.storeId, storeId));
     }
     if (date) {
       filtered = filtered.filter((s) => !s.date || s.date === date);
@@ -1519,6 +1632,7 @@ async function startServer() {
         }
       });
 
+      persistStoreToDisk();
       syncToSheetsBackend('Data_Susut', inMemoryStore.dataSusut);
       res.json({ success: true, dataSusut: inMemoryStore.dataSusut });
     } catch (err: any) {
@@ -1550,6 +1664,7 @@ async function startServer() {
       inMemoryStore.dataSusut = inMemoryStore.dataSusut.filter(
         (s) => (s.date || s.createdAt || '').split('T')[0] !== targetDate
       );
+      persistStoreToDisk();
 
       const p = getPool();
       if (p) {
@@ -1578,6 +1693,7 @@ async function startServer() {
       inMemoryStore.stockAdjustments = [];
       inMemoryStore.dailyClosingReports = [];
       inMemoryStore.dataSusut = [];
+      persistStoreToDisk();
 
       const p = getPool();
       if (p) {
@@ -1620,8 +1736,9 @@ async function startServer() {
         `;
         const params: any[] = [];
         if (storeId) {
-          query += ` WHERE store_id = $1`;
-          params.push(storeId);
+          const variants = getStoreIdVariants(storeId);
+          query += ` WHERE store_id = ANY($1)`;
+          params.push(variants);
         }
         query += ` ORDER BY date DESC, created_at DESC`;
         const result = await p.query(query, params);
@@ -1641,7 +1758,9 @@ async function startServer() {
         console.warn('Postgres fetch reports error:', err);
       }
     }
-    const filtered = storeId ? inMemoryStore.dailyClosingReports.filter((r) => !r.storeId || r.storeId === storeId) : inMemoryStore.dailyClosingReports;
+    const filtered = storeId
+      ? inMemoryStore.dailyClosingReports.filter((r) => matchStoreIdBackend(r.storeId, storeId))
+      : inMemoryStore.dailyClosingReports;
     res.json(filtered);
   });
 
@@ -1688,6 +1807,7 @@ async function startServer() {
           inMemoryStore.dailyClosingReports.unshift(r);
         }
       });
+      persistStoreToDisk();
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
     } catch (err: any) {
@@ -1706,6 +1826,7 @@ async function startServer() {
         }
       }
       inMemoryStore.dailyClosingReports = inMemoryStore.dailyClosingReports.filter((r) => r.id !== req.params.id);
+      persistStoreToDisk();
       syncToSheetsBackend('Laporan_Closing', inMemoryStore.dailyClosingReports);
       res.json({ success: true, reports: inMemoryStore.dailyClosingReports });
     } catch (err: any) {
@@ -1731,6 +1852,7 @@ async function startServer() {
           inMemoryStore.trainingFiles.unshift(f);
         }
       }
+      persistStoreToDisk();
       res.json({ success: true, files: inMemoryStore.trainingFiles });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1740,6 +1862,7 @@ async function startServer() {
   app.delete('/api/training-files/:id', (req, res) => {
     try {
       inMemoryStore.trainingFiles = inMemoryStore.trainingFiles.filter((f) => f.id !== req.params.id);
+      persistStoreToDisk();
       res.json({ success: true, files: inMemoryStore.trainingFiles });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1764,6 +1887,7 @@ async function startServer() {
           inMemoryStore.dailyTargets.push(c);
         }
       }
+      persistStoreToDisk();
       res.json({ success: true, configs: inMemoryStore.dailyTargets });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1775,7 +1899,7 @@ async function startServer() {
     const storeId = req.query.storeId as string;
     let records = inMemoryStore.salesTrainingDataset;
     if (storeId) {
-      records = records.filter((r: any) => !r.storeId || String(r.storeId) === String(storeId));
+      records = records.filter((r: any) => matchStoreIdBackend(r.storeId, storeId));
     }
     res.json({ success: true, dataset: records });
   });
@@ -1793,6 +1917,7 @@ async function startServer() {
           inMemoryStore.salesTrainingDataset.unshift(item);
         }
       }
+      persistStoreToDisk();
       res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1804,6 +1929,7 @@ async function startServer() {
       inMemoryStore.salesTrainingDataset = inMemoryStore.salesTrainingDataset.filter(
         (r: any) => r.id !== req.params.id
       );
+      persistStoreToDisk();
       res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1815,11 +1941,12 @@ async function startServer() {
       const storeId = req.query.storeId as string;
       if (storeId) {
         inMemoryStore.salesTrainingDataset = inMemoryStore.salesTrainingDataset.filter(
-          (r: any) => r.storeId && String(r.storeId) !== String(storeId)
+          (r: any) => !matchStoreIdBackend(r.storeId, storeId)
         );
       } else {
         inMemoryStore.salesTrainingDataset = [];
       }
+      persistStoreToDisk();
       res.json({ success: true, dataset: inMemoryStore.salesTrainingDataset });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
