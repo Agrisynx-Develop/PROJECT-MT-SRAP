@@ -65,8 +65,24 @@ export default function AntrianPabrikasi({
   const [thawingImage, setThawingImage] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const thawingItems = items.filter((i) => i.status === 'thawing');
-  const readyItems = items.filter((i) => i.status === 'pabrikasi_ready' || i.status === 'pabrikasi_done');
+  const isThawingStatus = (s?: string) => {
+    if (!s) return true;
+    const lower = s.toLowerCase().trim();
+    return lower === 'thawing' || lower === 'sedang thawing' || lower === 'antrian' || lower === 'proses thawing';
+  };
+  const isReadyStatus = (s?: string) => {
+    if (!s) return false;
+    const lower = s.toLowerCase().trim();
+    return lower === 'pabrikasi_ready' || lower === 'siap potong' || lower === 'ready';
+  };
+  const isDoneStatus = (s?: string) => {
+    if (!s) return false;
+    const lower = s.toLowerCase().trim();
+    return lower === 'pabrikasi_done' || lower === 'selesai' || lower === 'done';
+  };
+
+  const thawingItems = items.filter((i) => isThawingStatus(i.status));
+  const readyItems = items.filter((i) => isReadyStatus(i.status) || isDoneStatus(i.status));
 
   const selectedItem = items.find((i) => i.id === selectedItemId);
 
@@ -176,6 +192,9 @@ export default function AntrianPabrikasi({
                         <span>Operator: <strong className="text-slate-700">{item.butcherName}</strong></span>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        <span className="text-[11px] bg-red-50 text-red-700 font-bold px-2 py-0.5 rounded-md inline-block border border-red-200">
+                          🏬 {item.storeName || (item.storeId === '1' ? 'TDN CKR' : item.storeId) || 'TDN CKR'}
+                        </span>
                         <span className="text-xs bg-slate-100 text-slate-600 font-medium px-2 py-1 rounded-md inline-block">
                           📋 Rencana: {item.plannedFabrication || 'PENDING'}
                         </span>
