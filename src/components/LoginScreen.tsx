@@ -175,6 +175,59 @@ export default function LoginScreen({ onLoginSuccess, onOpenSheetsModal, cloudCo
               )}
             </button>
           </form>
+
+          {/* 1-Click Fast Role Selection for Testing Sync */}
+          <div className="pt-3 border-t border-slate-800">
+            <p className="text-[11px] font-bold text-slate-400 mb-2 flex items-center gap-1.5">
+              <span>⚡ Akses Cepat Peran (Pengujian Sinkronisasi):</span>
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setUsername('butcher_ckr');
+                  setPassword('password123');
+                  const resolved = resolveUserFromInput('butcher_ckr');
+                  onLoginSuccess(resolved);
+                }}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-left transition cursor-pointer group"
+              >
+                <div className="text-sm mb-0.5">🥩</div>
+                <div className="text-[11px] font-bold text-white group-hover:text-red-400">Butcher CKR</div>
+                <div className="text-[9px] text-slate-400">Input & Potong</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUsername('admin_ckr');
+                  setPassword('password123');
+                  const resolved = resolveUserFromInput('admin_ckr');
+                  onLoginSuccess(resolved);
+                }}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-left transition cursor-pointer group"
+              >
+                <div className="text-sm mb-0.5">🏢</div>
+                <div className="text-[11px] font-bold text-white group-hover:text-blue-400">Admin CKR</div>
+                <div className="text-[9px] text-slate-400">Toko & Sales</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUsername('md_pusat');
+                  setPassword('password123');
+                  const resolved = resolveUserFromInput('md_pusat');
+                  onLoginSuccess(resolved);
+                }}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-left transition cursor-pointer group"
+              >
+                <div className="text-sm mb-0.5">🌐</div>
+                <div className="text-[11px] font-bold text-white group-hover:text-emerald-400">MD Pusat</div>
+                <div className="text-[9px] text-slate-400">Semua Cabang</div>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Cloud Connection Quick Control */}
