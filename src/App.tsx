@@ -319,21 +319,65 @@ export default function App() {
 
       if (resItems && resItems.ok) {
         const data = await resItems.json();
-        if (Array.isArray(data)) setItems(deduplicateThawingItems(data));
+        const serverList: ThawingItem[] = Array.isArray(data) ? data : [];
+        const localList: ThawingItem[] = getThawingItems();
+        const itemMap = new Map<string, ThawingItem>();
+        serverList.forEach((it) => { if (it && it.id) itemMap.set(it.id, it); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!itemMap.has(loc.id)) {
+            itemMap.set(loc.id, loc);
+          } else {
+            const srv = itemMap.get(loc.id)!;
+            const lTime = new Date(loc.createdAt || loc.thawingStartTime || 0).getTime();
+            const sTime = new Date(srv.createdAt || srv.thawingStartTime || 0).getTime();
+            if (lTime >= sTime || (loc.status === 'pabrikasi_done' && srv.status !== 'pabrikasi_done')) {
+              itemMap.set(loc.id, { ...srv, ...loc });
+            }
+          }
+        });
+        const merged = deduplicateThawingItems(Array.from(itemMap.values()));
+        setItems(merged);
+        saveThawingItems(merged);
       } else {
         setItems(deduplicateThawingItems(getThawingItems()));
       }
 
       if (resSegs && resSegs.ok) {
         const data = await resSegs.json();
-        if (Array.isArray(data)) setSegments(data);
+        const serverList: FabricationSegment[] = Array.isArray(data) ? data : [];
+        const localList: FabricationSegment[] = getFabricationSegments();
+        const segMap = new Map<string, FabricationSegment>();
+        serverList.forEach((s) => { if (s && s.id) segMap.set(s.id, s); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!segMap.has(loc.id)) {
+            segMap.set(loc.id, loc);
+          } else {
+            const srv = segMap.get(loc.id)!;
+            segMap.set(loc.id, { ...srv, ...loc });
+          }
+        });
+        const merged = Array.from(segMap.values());
+        setSegments(merged);
+        saveFabricationSegments(merged);
       } else {
         setSegments(getFabricationSegments());
       }
 
       if (resAdjs && resAdjs.ok) {
         const data = await resAdjs.json();
-        if (Array.isArray(data)) setAdjustments(data);
+        const serverList: StockAdjustment[] = Array.isArray(data) ? data : [];
+        const localList: StockAdjustment[] = getStockAdjustments();
+        const adjMap = new Map<string, StockAdjustment>();
+        serverList.forEach((a) => { if (a && a.id) adjMap.set(a.id, a); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!adjMap.has(loc.id)) adjMap.set(loc.id, loc);
+        });
+        const merged = Array.from(adjMap.values());
+        setAdjustments(merged);
+        saveStockAdjustments(merged);
       } else {
         setAdjustments(getStockAdjustments());
       }
@@ -402,7 +446,17 @@ export default function App() {
 
       if (resReps && resReps.ok) {
         const data = await resReps.json();
-        if (Array.isArray(data)) setReports(deduplicateDailyReports(data));
+        const serverList: DailyClosingReport[] = Array.isArray(data) ? data : [];
+        const localList: DailyClosingReport[] = getDailyReports();
+        const repMap = new Map<string, DailyClosingReport>();
+        serverList.forEach((r) => { if (r && r.id) repMap.set(r.id, r); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!repMap.has(loc.id)) repMap.set(loc.id, loc);
+        });
+        const merged = deduplicateDailyReports(Array.from(repMap.values()));
+        setReports(merged);
+        saveDailyReports(merged);
       } else {
         setReports(deduplicateDailyReports(getDailyReports()));
       }
@@ -471,8 +525,9 @@ export default function App() {
       try {
         bc = new BroadcastChannel('tdn_meat_tracker_channel');
         bc.onmessage = (event) => {
-          if (event.data?.type === 'CLOSING_RECORD_SAVED' && event.data.record) {
-            const incoming: ClosingPlanRecord = event.data.record;
+          const { type, record, item, segments: inSegs, adjustment, report } = event.data || {};
+          if (type === 'CLOSING_RECORD_SAVED' && record) {
+            const incoming: ClosingPlanRecord = record;
             setClosingRecords((prev) => {
               const existingIdx = prev.findIndex(
                 (r) =>
@@ -488,6 +543,49 @@ export default function App() {
               }
               return [incoming, ...prev];
             });
+          } else if (type === 'THAWING_ITEM_SAVED' && item) {
+            setItems((prev) => {
+              const existingIdx = prev.findIndex((i) => i.id === item.id);
+              if (existingIdx >= 0) {
+                const next = [...prev];
+                next[existingIdx] = { ...next[existingIdx], ...item };
+                return next;
+              }
+              return [item, ...prev];
+            });
+          } else if (type === 'FABRICATION_SEGMENTS_SAVED') {
+            if (Array.isArray(inSegs)) {
+              setSegments((prev) => {
+                const map = new Map(prev.map((s) => [s.id, s]));
+                inSegs.forEach((s) => map.set(s.id, s));
+                return Array.from(map.values());
+              });
+            }
+            if (item) {
+              setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...item } : i)));
+            }
+          } else if (type === 'ADJUSTMENT_SAVED' && adjustment) {
+            setAdjustments((prev) => {
+              const idx = prev.findIndex((a) => a.id === adjustment.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = adjustment;
+                return next;
+              }
+              return [adjustment, ...prev];
+            });
+          } else if (type === 'REPORT_SAVED' && report) {
+            setReports((prev) => {
+              const idx = prev.findIndex((r) => r.id === report.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = report;
+                return next;
+              }
+              return [report, ...prev];
+            });
+          } else if (type === 'DATA_REFRESH_REQUESTED') {
+            fetchAllData(true);
           }
         };
       } catch (e) {
@@ -514,6 +612,7 @@ export default function App() {
     const userObj = { ...user, role: roleNorm };
     setCurrentUserState(userObj);
     setCurrentUser(userObj);
+    fetchAllData(true);
     if (roleNorm === 'md') {
       setActiveTab('md');
     } else if (roleNorm === 'admin') {
@@ -569,6 +668,16 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     }).catch(console.error);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const chan = new BroadcastChannel('tdn_meat_tracker_channel');
+        chan.postMessage({ type: 'THAWING_ITEM_SAVED', item });
+        chan.close();
+      } catch {
+        // ignore
+      }
+    }
   };
 
   // Handler: Batch Add Items (guarantees multiple items are added without closure overwrite)
@@ -695,7 +804,7 @@ export default function App() {
       salesKg: 0,
       plannedFabrication: planName,
       openingPurpose: purpose,
-      storeId: currentUser?.storeId || 'store_ckr',
+      storeId: parentItem?.storeId || currentStore?.id || currentUser?.storeId || '1',
       createdAt: new Date().toISOString(),
     }));
 
@@ -727,6 +836,16 @@ export default function App() {
     const updatedParent = updatedItems.find((i) => i.id === itemId);
     if (updatedParent) {
       upsertRecordToSheets('thawing_items', updatedParent);
+    }
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const chan = new BroadcastChannel('tdn_meat_tracker_channel');
+        chan.postMessage({ type: 'FABRICATION_SEGMENTS_SAVED', segments: createdSegments, item: updatedParent });
+        chan.close();
+      } catch {
+        // ignore
+      }
     }
   };
 
