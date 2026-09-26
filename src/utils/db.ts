@@ -13,15 +13,8 @@ import {
   SalesTrainingRecord,
   SalesPredictionModelConfig,
   PythonModelArtifact,
+  GrnRecord,
 } from '../types';
-import {
-  fetchAllDataFromSheets,
-  upsertRecordToSheets,
-  deleteRecordFromSheets,
-  updateTableInSheets,
-  getGoogleAppsScriptUrl,
-  AllSheetsData
-} from './sheetsApi';
 import { normalizePlanName, getDeterministicClosingRecordId } from './storeHelper';
 
 // Default alert configuration
@@ -106,9 +99,10 @@ export function resolveUserFromInput(usernameInput: any): UserAccount {
     matchedStore = allStores[0];
   }
 
-  const codeLower = matchedStore?.code.toLowerCase() || 'ckt';
-  const storeName = matchedStore?.name || 'TDN Cikut';
-  const storeId = matchedStore?.id || 'store_ckt';
+  const codeLower = matchedStore?.code.toLowerCase() || 'ckr';
+  const storeName = matchedStore?.name || 'TDN CKR';
+  const storeId = matchedStore?.id || '1';
+  const partnerRole = role === 'butcher' ? 'admin' : 'butcher';
 
   return {
     id: `user_${role}_${codeLower}`,
@@ -117,54 +111,77 @@ export function resolveUserFromInput(usernameInput: any): UserAccount {
     storeId,
     storeName,
     fullName: `${role === 'butcher' ? 'Butcher' : 'Admin'} ${storeName}`,
+    linkedAccountId: `user_${partnerRole}_${codeLower}`,
     createdAt: new Date().toISOString(),
   };
 }
 
 // --- DATABASE SYNCHRONIZATION HELPERS ---
 
+export const DEFAULT_STORES: Store[] = [
+  { id: '1', code: 'CKR', name: 'TDN CKR', city: 'Cikarang', createdAt: '2026-01-01' },
+  { id: '2', code: 'BKS', name: 'TDN BKS', city: 'Bekasi', createdAt: '2026-01-15' },
+  { id: '3', code: 'BDG', name: 'TDN BDG', city: 'Bandung', createdAt: '2026-02-01' },
+];
+
+export const DEFAULT_USERS: UserAccount[] = [
+  { id: '1', username: 'butcher_ckr', role: 'butcher', storeId: '1', storeName: 'TDN CKR', fullName: 'Butcher TDN CKR', linkedAccountId: '2', createdAt: '2026-01-01' },
+  { id: '2', username: 'admin_ckr', role: 'admin', storeId: '1', storeName: 'TDN CKR', fullName: 'Admin TDN CKR', linkedAccountId: '1', createdAt: '2026-01-01' },
+  { id: '3', username: 'md_pusat', role: 'md', storeId: undefined, storeName: undefined, fullName: 'Chief Merchandiser (MD Pusat)', createdAt: '2026-01-01' },
+  { id: '4', username: 'butcher_bks', role: 'butcher', storeId: '2', storeName: 'TDN BKS', fullName: 'Butcher TDN BKS', linkedAccountId: '5', createdAt: '2026-01-15' },
+  { id: '5', username: 'admin_bks', role: 'admin', storeId: '2', storeName: 'TDN BKS', fullName: 'Admin TDN BKS', linkedAccountId: '4', createdAt: '2026-01-15' },
+  { id: '6', username: 'butcher_bdg', role: 'butcher', storeId: '3', storeName: 'TDN BDG', fullName: 'Butcher TDN BDG', linkedAccountId: '7', createdAt: '2026-02-01' },
+  { id: '7', username: 'admin_bdg', role: 'admin', storeId: '3', storeName: 'TDN BDG', fullName: 'Admin TDN BDG', linkedAccountId: '6', createdAt: '2026-02-01' },
+];
+
 export const getStores = (): Store[] => {
   const data = localStorage.getItem('stores_list');
-  return data ? JSON.parse(data) : [];
+  if (data) {
+    try {
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // Fallback
+    }
+  }
+  return DEFAULT_STORES;
 };
 
 export const saveStores = (stores: Store[]) => {
   localStorage.setItem('stores_list', JSON.stringify(stores));
   postApiBackground('/api/stores', stores);
-  if (getGoogleAppsScriptUrl()) {
-    updateTableInSheets('Toko_Cabang', stores);
-  }
 };
 
 export const getUsers = (): UserAccount[] => {
   const data = localStorage.getItem('users_list');
-  return data ? JSON.parse(data) : [];
+  if (data) {
+    try {
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // Fallback
+    }
+  }
+  return DEFAULT_USERS;
 };
 
 export const saveUsers = (users: UserAccount[]) => {
   localStorage.setItem('users_list', JSON.stringify(users));
   postApiBackground('/api/users', users);
-  if (getGoogleAppsScriptUrl()) {
-    updateTableInSheets('Pengguna', users);
-  }
 };
 
 export const getCurrentUser = (): UserAccount => {
   const data = localStorage.getItem('current_logged_user');
   if (!data) {
-    const defaultUser: UserAccount = {
-      id: 'user_butcher_ckt',
-      username: 'butcher_ckt',
-      role: 'butcher',
-      storeId: 'store_ckt',
-      storeName: 'TDN Cikut',
-      fullName: 'Butcher TDN Cikut',
-      createdAt: '2026-01-01',
-    };
+    const defaultUser: UserAccount = DEFAULT_USERS[0];
     localStorage.setItem('current_logged_user', JSON.stringify(defaultUser));
     return defaultUser;
   }
-  return JSON.parse(data);
+  try {
+    return JSON.parse(data);
+  } catch {
+    return DEFAULT_USERS[0];
+  }
 };
 
 export const setCurrentUser = (user: UserAccount) => {
@@ -221,9 +238,6 @@ export const saveCogsMaster = (cogs: CogsMaster[]) => {
   const normalized = normalizeCogsList(cogs);
   localStorage.setItem('cogs_master', JSON.stringify(normalized));
   postApiBackground('/api/cogs', normalized);
-  if (getGoogleAppsScriptUrl()) {
-    updateTableInSheets('Master_COGS', normalized);
-  }
 };
 
 /**
@@ -274,16 +288,13 @@ export const getStockAdjustments = (): StockAdjustment[] => {
   return data ? JSON.parse(data) : [];
 };
 
-export const saveStockAdjustments = (adjs: StockAdjustment[], updatedSingleAdj?: StockAdjustment) => {
+export const saveStockAdjustmentsLocally = (adjs: StockAdjustment[]) => {
+  safeSetItem('stock_adjustments', JSON.stringify(adjs));
+};
+
+export const saveStockAdjustments = (adjs: StockAdjustment[], _updatedSingleAdj?: StockAdjustment) => {
   safeSetItem('stock_adjustments', JSON.stringify(adjs));
   postApiBackground('/api/adjustments', adjs);
-  if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleAdj) {
-      upsertRecordToSheets('Koreksi_Stok', updatedSingleAdj);
-    } else {
-      updateTableInSheets('Koreksi_Stok', adjs);
-    }
-  }
 };
 
 export const getClosingPlanRecords = (): ClosingPlanRecord[] => {
@@ -292,31 +303,19 @@ export const getClosingPlanRecords = (): ClosingPlanRecord[] => {
   try {
     const parsed = JSON.parse(data);
     if (!Array.isArray(parsed)) return [];
-    // Filter out unwanted test dates such as 2026-08-29
-    return parsed.filter((r) => {
-      const d = (r.date || r.timestamp || '').split('T')[0];
-      return d !== '2026-08-29';
-    });
+    return parsed;
   } catch {
     return [];
   }
 };
 
-export const saveClosingPlanRecords = (records: ClosingPlanRecord[], updatedSingleRecord?: ClosingPlanRecord) => {
-  // Always sanitize before saving
-  const sanitized = records.filter((r) => {
-    const d = (r.date || r.timestamp || '').split('T')[0];
-    return d !== '2026-08-29';
-  });
-  safeSetItem('closing_plan_records', JSON.stringify(sanitized));
-  postApiBackground('/api/closing-records', sanitized);
-  if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleRecord && (updatedSingleRecord.date || updatedSingleRecord.timestamp || '').split('T')[0] !== '2026-08-29') {
-      upsertRecordToSheets('Closing_Fisik', updatedSingleRecord);
-    } else {
-      updateTableInSheets('Closing_Fisik', sanitized);
-    }
-  }
+export const saveClosingPlanRecordsLocally = (records: ClosingPlanRecord[]) => {
+  safeSetItem('closing_plan_records', JSON.stringify(records));
+};
+
+export const saveClosingPlanRecords = (records: ClosingPlanRecord[], _updatedSingleRecord?: ClosingPlanRecord) => {
+  safeSetItem('closing_plan_records', JSON.stringify(records));
+  postApiBackground('/api/closing-records', records);
 };
 
 export const deleteClosingPlanRecord = (id: string): ClosingPlanRecord[] => {
@@ -324,16 +323,14 @@ export const deleteClosingPlanRecord = (id: string): ClosingPlanRecord[] => {
   const updated = current.filter((r) => r.id !== id);
   safeSetItem('closing_plan_records', JSON.stringify(updated));
   fetch(`/api/closing-records/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
-  if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Closing_Fisik', id);
-  }
   return updated;
 };
 
 /**
- * Purge all records across all tables for a specific date (default: 2026-08-29)
+ * Purge all records across all tables for a specific date
  */
-export const purgeDateRecords = (dateToPurge: string = '2026-08-29') => {
+export const purgeDateRecords = (dateToPurge: string) => {
+  if (!dateToPurge) return;
   try {
     // 1. Closing Plan Records
     const closingKey = 'closing_plan_records';
@@ -432,44 +429,31 @@ export const purgeDateRecords = (dateToPurge: string = '2026-08-29') => {
   }
 };
 
-// Immediately execute purge of 2026-08-29 on module evaluation
-try {
-  purgeDateRecords('2026-08-29');
-} catch {
-  // ignore
-}
-
 
 export const deduplicateThawingItems = (rawItems: ThawingItem[]): ThawingItem[] => {
   if (!Array.isArray(rawItems)) return [];
-  const mapBySemantic = new Map<string, ThawingItem>();
+  const mapById = new Map<string, ThawingItem>();
 
   for (const item of rawItems) {
     if (!item) continue;
     const id = item.id || `meat_${Math.random().toString(36).substring(2, 8)}`;
-    const storeId = item.storeId || '1';
-    const datePart = (item.createdAt || item.thawingStartTime || '').split('T')[0] || 'nodate';
-    const nameNorm = (item.name || '').trim().toLowerCase();
-    const planNorm = (item.plannedFabrication || '').trim().toLowerCase();
-    const wBefore = (Number(item.weightBeforeThawing) || 0).toFixed(3);
-    const wAfter = (Number(item.weightAfterThawing !== null && item.weightAfterThawing !== undefined ? item.weightAfterThawing : item.weightBeforeThawing) || 0).toFixed(3);
     const hasPhoto = Boolean(item.image && item.image !== 'placeholder' && item.image.trim());
 
-    // Strict semantic signature: store + date + name + plan + tally + netto
-    const semKey = `${storeId}_${datePart}_${nameNorm}_${planNorm}_${wBefore}_${wAfter}`;
-
-    if (mapBySemantic.has(semKey)) {
-      const existing = mapBySemantic.get(semKey)!;
+    if (mapById.has(id)) {
+      const existing = mapById.get(id)!;
       const existingHasPhoto = Boolean(existing.image && existing.image !== 'placeholder' && existing.image.trim());
-      if (hasPhoto && !existingHasPhoto) {
-        mapBySemantic.set(semKey, { ...item, id: existing.id || item.id });
-      }
+      mapById.set(id, {
+        ...existing,
+        ...item,
+        id,
+        image: hasPhoto ? item.image : (existingHasPhoto ? existing.image : item.image),
+      });
     } else {
-      mapBySemantic.set(semKey, { ...item, id });
+      mapById.set(id, { ...item, id });
     }
   }
 
-  return Array.from(mapBySemantic.values());
+  return Array.from(mapById.values());
 };
 
 export const deduplicateDailyReports = (reports: DailyClosingReport[]): DailyClosingReport[] => {
@@ -505,23 +489,15 @@ export const getThawingItems = (): ThawingItem[] => {
   }
 };
 
-export const saveThawingItems = (items: ThawingItem[], updatedSingleItem?: ThawingItem) => {
+export const saveThawingItemsLocally = (items: ThawingItem[]) => {
+  const cleanItems = deduplicateThawingItems(items);
+  safeSetItem('thawing_items', JSON.stringify(cleanItems));
+};
+
+export const saveThawingItems = (items: ThawingItem[], _updatedSingleItem?: ThawingItem) => {
   const cleanItems = deduplicateThawingItems(items);
   safeSetItem('thawing_items', JSON.stringify(cleanItems));
   postApiBackground('/api/thawing-items', cleanItems);
-  if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleItem) {
-      upsertRecordToSheets('Thawing_Daging', updatedSingleItem);
-    } else {
-      updateTableInSheets('Thawing_Daging', cleanItems);
-    }
-  }
-};
-
-export const deleteThawingItemFromCloud = (id: string) => {
-  if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Thawing_Daging', id);
-  }
 };
 
 export const getFabricationSegments = (): FabricationSegment[] => {
@@ -529,16 +505,13 @@ export const getFabricationSegments = (): FabricationSegment[] => {
   return data ? JSON.parse(data) : [];
 };
 
-export const saveFabricationSegments = (segments: FabricationSegment[], updatedSingleSegment?: FabricationSegment) => {
+export const saveFabricationSegmentsLocally = (segments: FabricationSegment[]) => {
+  safeSetItem('fabrication_segments', JSON.stringify(segments));
+};
+
+export const saveFabricationSegments = (segments: FabricationSegment[], _updatedSingleSegment?: FabricationSegment) => {
   safeSetItem('fabrication_segments', JSON.stringify(segments));
   postApiBackground('/api/fabrication-segments', segments);
-  if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleSegment) {
-      upsertRecordToSheets('Pabrikasi_Segmen', updatedSingleSegment);
-    } else {
-      updateTableInSheets('Pabrikasi_Segmen', segments);
-    }
-  }
 };
 
 export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
@@ -546,9 +519,6 @@ export const deleteFabricationSegment = (id: string): FabricationSegment[] => {
   const updated = current.filter((s) => s.id !== id);
   safeSetItem('fabrication_segments', JSON.stringify(updated));
   fetch(`/api/fabrication-segments/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
-  if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Pabrikasi_Segmen', id);
-  }
   return updated;
 };
 
@@ -557,16 +527,13 @@ export const getDailyReports = (): DailyClosingReport[] => {
   return data ? JSON.parse(data) : [];
 };
 
-export const saveDailyReports = (reports: DailyClosingReport[], updatedSingleReport?: DailyClosingReport) => {
+export const saveDailyReportsLocally = (reports: DailyClosingReport[]) => {
+  safeSetItem('daily_reports', JSON.stringify(reports));
+};
+
+export const saveDailyReports = (reports: DailyClosingReport[], _updatedSingleReport?: DailyClosingReport) => {
   safeSetItem('daily_reports', JSON.stringify(reports));
   postApiBackground('/api/reports', reports);
-  if (getGoogleAppsScriptUrl()) {
-    if (updatedSingleReport) {
-      upsertRecordToSheets('Laporan_Closing', updatedSingleReport);
-    } else {
-      updateTableInSheets('Laporan_Closing', reports);
-    }
-  }
 };
 
 export const deleteDailyReport = (id: string): DailyClosingReport[] => {
@@ -574,9 +541,6 @@ export const deleteDailyReport = (id: string): DailyClosingReport[] => {
   const updated = current.filter((r) => r.id !== id);
   safeSetItem('daily_reports', JSON.stringify(updated));
   fetch(`/api/reports/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
-  if (getGoogleAppsScriptUrl()) {
-    deleteRecordFromSheets('Laporan_Closing', id);
-  }
   return updated;
 };
 
@@ -591,188 +555,23 @@ export const saveLossConfig = (config: LossAlertConfig) => {
 };
 
 export const resetDatabase = async () => {
+  // Wipe all transaction / input stores
   localStorage.removeItem('thawing_items');
   localStorage.removeItem('fabrication_segments');
   localStorage.removeItem('stock_adjustments');
   localStorage.removeItem('closing_plan_records');
   localStorage.removeItem('daily_reports');
+  localStorage.removeItem('data_susut');
+  localStorage.removeItem('training_files_records');
+  localStorage.removeItem('sales_training_dataset');
+  localStorage.removeItem('python_ml_models');
+
+  // Trigger server-side truncate
   try {
     await fetch('/api/database/reset', { method: 'POST' });
   } catch {
     // ignore
   }
-};
-
-/**
- * Perform a full pull from Google Spreadsheet Cloud API
- * and refresh local cache (Defensive: never overwrites valid local records with empty array)
- */
-export const pullAllDataFromGoogleSheets = async (): Promise<{
-  success: boolean;
-  data?: AllSheetsData;
-  error?: string;
-}> => {
-  const result = await fetchAllDataFromSheets();
-  if (result.success && result.data) {
-    const d = result.data;
-
-    // 1. Stores (Preserve any local custom stores)
-    if (d.stores && d.stores.length > 0) {
-      const localStores = getStores();
-      const storeMap = new Map<string, Store>();
-      d.stores.forEach((s) => storeMap.set(String(s.id), s));
-      localStores.forEach((ls) => {
-        if (!storeMap.has(String(ls.id))) {
-          storeMap.set(String(ls.id), ls);
-        }
-      });
-      const mergedStores = Array.from(storeMap.values());
-      safeSetItem('stores_list', JSON.stringify(mergedStores));
-      d.stores = mergedStores;
-    }
-
-    // 2. Users (Preserve local users)
-    if (d.users && d.users.length > 0) {
-      const localUsers = getUsers();
-      const userMap = new Map<string, UserAccount>();
-      d.users.forEach((u) => userMap.set(String(u.id || u.username), u));
-      localUsers.forEach((lu) => {
-        const key = String(lu.id || lu.username);
-        if (!userMap.has(key)) {
-          userMap.set(key, lu);
-        }
-      });
-      const mergedUsers = Array.from(userMap.values());
-      safeSetItem('users_list', JSON.stringify(mergedUsers));
-      d.users = mergedUsers;
-    }
-
-    // 3. COGS Master
-    if (d.cogsMaster && d.cogsMaster.length > 0) {
-      safeSetItem('cogs_master', JSON.stringify(normalizeCogsList(d.cogsMaster)));
-    }
-
-    // 4. Thawing Items / Bahan Baku Masuk (Defensive Smart Merge: NEVER duplicate items!)
-    const currentLocalItems = getThawingItems();
-    const candidateItems = [...(d.thawingItems || []), ...currentLocalItems];
-    const mergedItems = deduplicateThawingItems(candidateItems).filter(
-      (i) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29'
-    );
-    safeSetItem('thawing_items', JSON.stringify(mergedItems));
-    d.thawingItems = mergedItems;
-
-    // 5. Fabrication Segments (Smart Merge)
-    const currentLocalSegments = getFabricationSegments();
-    const segMap = new Map<string, FabricationSegment>();
-    (d.fabricationSegments || []).forEach((s) => {
-      if (s && s.id) segMap.set(String(s.id), s);
-    });
-    currentLocalSegments.forEach((loc) => {
-      if (!loc || !loc.id) return;
-      if (!segMap.has(String(loc.id))) {
-        segMap.set(String(loc.id), loc);
-      }
-    });
-    const mergedSegments = Array.from(segMap.values());
-    safeSetItem('fabrication_segments', JSON.stringify(mergedSegments));
-    d.fabricationSegments = mergedSegments;
-
-    // 6. Closing Plan Records (Closing Fisik) - Smart Bi-directional Merge
-    const currentLocalClosing = getClosingPlanRecords();
-    const closingMap = new Map<string, ClosingPlanRecord>();
-
-    // Helper for clean key
-    const makeClosingKey = (c: ClosingPlanRecord): string => {
-      const cleanStore = String(c.storeId || '1').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const cleanPlan = normalizePlanName(c.planName || 'general');
-      const cleanDate = (c.date || (c.timestamp ? c.timestamp.split('T')[0] : '')).replace(/[^0-9\-]/g, '');
-      return `${cleanStore}_${cleanPlan}_${cleanDate}`;
-    };
-
-    // Index cloud closing records
-    (d.closingPlanRecords || []).forEach((c) => {
-      if (c && (c.date || c.timestamp || '').split('T')[0] !== '2026-08-29') {
-        const key = c.id || makeClosingKey(c);
-        closingMap.set(key, c);
-      }
-    });
-
-    // Merge with local records
-    currentLocalClosing.forEach((loc) => {
-      if (!loc || (loc.date || loc.timestamp || '').split('T')[0] === '2026-08-29') return;
-      const keyById = loc.id;
-      const keyByProp = makeClosingKey(loc);
-      let foundKey: string | undefined = undefined;
-
-      if (keyById && closingMap.has(keyById)) {
-        foundKey = keyById;
-      } else if (closingMap.has(keyByProp)) {
-        foundKey = keyByProp;
-      }
-
-      if (!foundKey) {
-        // Locally saved record not yet on sheets -> PRESERVE!
-        const newKey = loc.id || keyByProp;
-        closingMap.set(newKey, loc);
-      } else {
-        const existing = closingMap.get(foundKey)!;
-        const locTime = new Date(loc.timestamp || 0).getTime();
-        const srvTime = new Date(existing.timestamp || 0).getTime();
-        const locActual = Number(loc.actualClosingStockKg || 0);
-        const srvActual = Number(existing.actualClosingStockKg || 0);
-
-        if (locTime >= srvTime || (locActual > 0 && srvActual === 0) || (loc.photoUrl && !existing.photoUrl)) {
-          closingMap.set(foundKey, { ...existing, ...loc });
-        } else {
-          closingMap.set(foundKey, {
-            ...loc,
-            ...existing,
-            photoUrl: existing.photoUrl || loc.photoUrl || '',
-            note: existing.note || loc.note || '',
-          });
-        }
-      }
-    });
-
-    const mergedClosing = Array.from(closingMap.values()).filter(
-      (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-    );
-    safeSetItem('closing_plan_records', JSON.stringify(mergedClosing));
-    d.closingPlanRecords = mergedClosing;
-
-    // 7. Daily Closing Reports (Rekap Harian)
-    const currentLocalReports = getDailyReports();
-    const candidateReports = [...(d.dailyClosingReports || []), ...currentLocalReports].filter(
-      (r) => r && r.date && r.date.split('T')[0] !== '2026-08-29'
-    );
-    const mergedReports = deduplicateDailyReports(candidateReports);
-    safeSetItem('daily_reports', JSON.stringify(mergedReports));
-    d.dailyClosingReports = mergedReports;
-
-    // 8. Stock Adjustments (Koreksi Stok)
-    const currentLocalAdjs = getStockAdjustments();
-    const adjMap = new Map<string, StockAdjustment>();
-    (d.stockAdjustments || []).forEach((a) => {
-      if (a && a.id) adjMap.set(String(a.id), a);
-    });
-    currentLocalAdjs.forEach((loc) => {
-      if (!loc || !loc.id) return;
-      if (!adjMap.has(String(loc.id))) {
-        adjMap.set(String(loc.id), loc);
-      }
-    });
-    const mergedAdjs = Array.from(adjMap.values()).filter(
-      (a) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'
-    );
-    safeSetItem('stock_adjustments', JSON.stringify(mergedAdjs));
-    d.stockAdjustments = mergedAdjs;
-
-    // 9. Loss Config
-    if (d.lossConfig) {
-      safeSetItem('loss_config', JSON.stringify(d.lossConfig));
-    }
-  }
-  return result;
 };
 
 // --- TRAINING FILES STORAGE ---
@@ -967,5 +766,49 @@ export const setActivePythonModel = (modelId: string | null, storeId: string = '
     updatedAt: new Date().toISOString(),
   };
   saveSalesPredictionConfig(newCfg);
+};
+
+// --- GRN (GOODS RECEIVED NOTE) STORAGE ---
+export const getGrnRecords = (storeId?: string, date?: string): GrnRecord[] => {
+  try {
+    const data = localStorage.getItem('grn_records');
+    if (data) {
+      let parsed: GrnRecord[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        if (storeId) parsed = parsed.filter((r) => !r.storeId || String(r.storeId) === String(storeId));
+        if (date) parsed = parsed.filter((r) => (r.date || '').split('T')[0] === date.split('T')[0]);
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load GRN records:', e);
+  }
+  return [];
+};
+
+export const saveGrnRecords = (records: GrnRecord[] | GrnRecord): void => {
+  const current = getGrnRecords();
+  const incoming = Array.isArray(records) ? records : [records];
+  const updated = [...current];
+
+  incoming.forEach((rec) => {
+    // Strictly match by unique ID to preserve multiple shipments with the same product name and amount
+    const idx = updated.findIndex((r) => Boolean(rec.id && r.id && r.id === rec.id));
+    if (idx >= 0) {
+      updated[idx] = { ...updated[idx], ...rec };
+    } else {
+      updated.unshift(rec);
+    }
+  });
+
+  safeSetItem('grn_records', JSON.stringify(updated));
+  postApiBackground('/api/grn', incoming);
+};
+
+export const deleteGrnRecord = (id: string): void => {
+  const current = getGrnRecords();
+  const updated = current.filter((r) => r.id !== id);
+  safeSetItem('grn_records', JSON.stringify(updated));
+  fetch(`/api/grn/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
 };
 

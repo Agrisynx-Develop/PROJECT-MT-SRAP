@@ -6,7 +6,8 @@ import {
   StockAdjustment,
   ClosingPlanRecord,
   CogsMaster,
-  DailyClosingReport
+  DailyClosingReport,
+  GrnRecord,
 } from '../types';
 import { matchStoreEntity } from './storeHelper';
 import {
@@ -1790,4 +1791,819 @@ export function downloadCSV(filename: string, rows: (string | number)[][]) {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+// ----------------- EXPORT SOSIS, KENTANG & FILLET DORI EXCEL (EXACT TEMPLATE) -----------------
+import {
+  SOSIS_KENTANG_CATALOG,
+  FILLET_DORI_CATALOG,
+  PARTING_AYAM_CATALOG,
+  CatalogProduct,
+} from './productCatalog';
+import { getPreviousDateStr, getHMinus1ClosingStock } from './dateUtils';
+import { isMatchPlan } from './storeHelper';
+
+function buildNonMeatSheet(
+  wb: any,
+  sheetName: string,
+  bannerTitle: string,
+  bannerColorRgb: string,
+  products: CatalogProduct[],
+  store: Store,
+  date: string,
+  closingRecords: ClosingPlanRecord[],
+  grnRecords: GrnRecord[],
+  adjustments: StockAdjustment[]
+) {
+  const ws: any = {};
+  const prevDate = getPreviousDateStr(date);
+
+  const formatDateLabel = (d: string) => {
+    try {
+      const parts = d.split('-');
+      if (parts.length === 3) {
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+        return `${parseInt(parts[2], 10)}-${monthNames[parseInt(parts[1], 10) - 1]}`;
+      }
+    } catch {}
+    return d;
+  };
+
+  const prevDateLabel = formatDateLabel(prevDate);
+  const curDateLabel = formatDateLabel(date);
+
+  // 1. Title Banner (Row 0, merged cols 0 to 14)
+  writeCell(ws, 0, 0, bannerTitle, undefined, {
+    bold: true,
+    color: bannerColorRgb === 'FFFFFF' ? '000000' : 'FFFFFF',
+    bg: bannerColorRgb,
+    fontSize: 12,
+    align: 'center',
+  });
+  for (let c = 1; c <= 14; c++) {
+    writeCell(ws, 0, c, '', undefined, {
+      bg: bannerColorRgb,
+    });
+  }
+
+  // 2. Table Headers (Row 1)
+  const headers = [
+    { text: 'NO', wch: 6 },
+    { text: 'item code', wch: 14 },
+    { text: 'PLU', wch: 12 },
+    { text: 'Tanggal', wch: 12 },
+    { text: 'Stock Akhir ( Malam )', wch: 22 },
+    { text: 'Item Produk', wch: 32 },
+    { text: 'Tanggal', wch: 12 },
+    { text: 'GRN', wch: 14, bg: 'FFFF00', color: '000000' },
+    { text: 'adj', wch: 12 },
+    { text: 'Total Real', wch: 16, bg: 'FFFF00', color: '000000' },
+    { text: 'Penjualan', wch: 14 },
+    { text: 'Stock Akhir By Sistem', wch: 22 },
+    { text: 'Tanggal', wch: 12 },
+    { text: 'Stock Akhir Real', wch: 18 },
+    { text: 'Penyusutan', wch: 16 },
+  ];
+
+  headers.forEach((h, cIdx) => {
+    writeCell(ws, 1, cIdx, h.text, undefined, {
+      bold: true,
+      bg: h.bg || 'F1F5F9',
+      color: h.color || '0F172A',
+      fontSize: 10,
+      align: cIdx === 5 ? 'left' : 'center',
+      border: 'thin',
+    });
+  });
+
+  // 3. Rows
+  let startRow = 2;
+  let sumOpening = 0;
+  let sumGrn = 0;
+  let sumAdj = 0;
+  let sumTotalReal = 0;
+  let sumSales = 0;
+  let sumStokSistem = 0;
+  let sumStokReal = 0;
+  let sumSusut = 0;
+
+  products.forEach((prod, idx) => {
+    const rowIdx = startRow + idx;
+    const closingRec = closingRecords.find(
+      (r) =>
+        (r.date || '').split('T')[0] === date &&
+        (isMatchPlan(r.planName, prod.name) || (prod.itemCode && r.itemCode === prod.itemCode))
+    );
+
+    const h1Stock = getHMinus1ClosingStock(closingRecords, store, prod.name, date);
+    const openingStock =
+      typeof closingRec?.openingStockKg === 'number' && closingRec.openingStockKg > 0
+        ? closingRec.openingStockKg
+        : typeof h1Stock === 'number'
+        ? h1Stock
+        : 0;
+
+    const productGrns = grnRecords.filter(
+      (g) =>
+        (g.date || '').split('T')[0] === date &&
+        (isMatchPlan(g.productName, prod.name) || (prod.itemCode && g.itemCode === prod.itemCode))
+    );
+    const grnKg = productGrns.reduce((sum, g) => sum + (g.weightKg || 0), 0) || (closingRec?.grnKg || 0);
+
+    const productAdjs = adjustments.filter(
+      (a) =>
+        (a.date || '').split('T')[0] === date &&
+        (isMatchPlan(a.planName, prod.name) || isMatchPlan(a.meatName, prod.name) || (prod.itemCode && a.itemCode === prod.itemCode))
+    );
+    const adjIn = productAdjs.filter((a) => a.type === 'IN').reduce((sum, a) => sum + (a.weightKg || 0), 0);
+    const adjOut = productAdjs.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + (a.weightKg || 0), 0);
+    const netAdj = adjIn - adjOut;
+
+    const totalReal = openingStock + grnKg + netAdj;
+    const salesKg = closingRec?.salesKg || 0;
+    const stockBySistem = Math.max(0, totalReal - salesKg);
+    const isClosed = Boolean(closingRec && typeof closingRec.actualClosingStockKg === 'number');
+    const stockReal = isClosed ? closingRec!.actualClosingStockKg : 0;
+    const penyusutan = isClosed ? Math.max(0, stockBySistem - stockReal) : 0;
+
+    sumOpening += openingStock;
+    sumGrn += grnKg;
+    sumAdj += netAdj;
+    sumTotalReal += totalReal;
+    sumSales += salesKg;
+    sumStokSistem += stockBySistem;
+    sumStokReal += stockReal;
+    sumSusut += penyusutan;
+
+    // Write cells
+    writeCell(ws, rowIdx, 0, idx + 1, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rowIdx, 1, prod.itemCode, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rowIdx, 2, prod.plu, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rowIdx, 3, prevDateLabel, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rowIdx, 4, openingStock, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rowIdx, 5, prod.name, undefined, { align: 'left', bold: true, border: 'thin' });
+    writeCell(ws, rowIdx, 6, curDateLabel, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rowIdx, 7, grnKg, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FEF08A', bold: true, border: 'thin' });
+    writeCell(ws, rowIdx, 8, netAdj, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rowIdx, 9, totalReal, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FEF08A', bold: true, border: 'thin' });
+    writeCell(ws, rowIdx, 10, salesKg, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rowIdx, 11, stockBySistem, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, border: 'thin' });
+    writeCell(ws, rowIdx, 12, curDateLabel, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rowIdx, 13, stockReal, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, color: '047857', border: 'thin' });
+    writeCell(ws, rowIdx, 14, penyusutan, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, color: penyusutan > 0 ? 'DC2626' : '000000', border: 'thin' });
+  });
+
+  // 4. Total Footer Row
+  const totalRowIdx = startRow + products.length;
+  writeCell(ws, totalRowIdx, 0, 'TOTAL', undefined, { align: 'center', bold: true, bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 1, '', undefined, { bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 2, '', undefined, { bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 3, '', undefined, { bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 4, sumOpening, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 5, `TOTAL ${sheetName}`, undefined, { align: 'left', bold: true, bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 6, '', undefined, { bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 7, sumGrn, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'FFFF00', border: 'thin' });
+  writeCell(ws, totalRowIdx, 8, sumAdj, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 9, sumTotalReal, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'FFFF00', border: 'thin' });
+  writeCell(ws, totalRowIdx, 10, sumSales, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 11, sumStokSistem, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 12, '', undefined, { bg: 'E2E8F0', border: 'thin' });
+  writeCell(ws, totalRowIdx, 13, sumStokReal, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'E2E8F0', color: '047857', border: 'thin' });
+  writeCell(ws, totalRowIdx, 14, sumSusut, undefined, { align: 'right', numFmt: '#,##0.000', bold: true, bg: 'E2E8F0', color: sumSusut > 0 ? 'DC2626' : '000000', border: 'thin' });
+
+  // Merges & Column widths
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 14 } }];
+  ws['!cols'] = headers.map((h) => ({ wch: h.wch }));
+
+  // Set range
+  const totalRows = totalRowIdx + 1;
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totalRows - 1, c: 14 } });
+
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+}
+
+// ----------------- EXPORT AYAM PARTING FRESH (EXACT TEMPLATES: Image 2, 3, 4, 5, 6) -----------------
+
+function buildPartingAyamYieldSheet(
+  wb: any,
+  sheetName: string,
+  store: Store,
+  date: string,
+  closingRecords: ClosingPlanRecord[],
+  grnRecords: GrnRecord[],
+  adjustments: StockAdjustment[]
+) {
+  const ws: any = {};
+  const cleanStoreName = store.name.replace(/^TDN\s*/i, '').trim();
+
+  const formatDateDisplay = (d: string) => {
+    try {
+      const parts = d.split('-');
+      if (parts.length === 3) {
+        return `${parseInt(parts[2], 10)}/${parseInt(parts[1], 10)}/${parts[0]}`;
+      }
+    } catch {}
+    return d;
+  };
+
+  const formattedDate = formatDateDisplay(date);
+
+  // Title Banner (Row 1 & 2)
+  writeCell(ws, 1, 0, 'TGL', undefined, { bold: true, align: 'center', border: 'darkThin', bg: 'F1F5F9' });
+  writeCell(ws, 1, 1, formattedDate, undefined, { bold: true, align: 'center', border: 'darkThin' });
+  writeCell(ws, 1, 2, '', undefined, { border: 'darkThin' });
+
+  writeCell(ws, 1, 3, 'REPORT CHICKEN PARTING FRESH', undefined, { bold: true, fontSize: 12, align: 'center' });
+  writeCell(ws, 2, 3, `TDN ${cleanStoreName.toUpperCase()}`, undefined, { bold: true, fontSize: 12, align: 'center' });
+
+  writeCell(ws, 1, 11, 'TDN', undefined, { bold: true, fontSize: 13, color: '7030A0', align: 'center' });
+
+  const merges: any[] = [
+    { s: { r: 1, c: 1 }, e: { r: 1, c: 2 } },
+    { s: { r: 1, c: 3 }, e: { r: 1, c: 10 } },
+    { s: { r: 2, c: 3 }, e: { r: 2, c: 10 } },
+    { s: { r: 1, c: 11 }, e: { r: 2, c: 12 } },
+  ];
+
+  let currentRow = 4;
+
+  PARTING_AYAM_CATALOG.forEach((prod, pIdx) => {
+    const sectionNum = prod.tdnSection || pIdx + 1;
+    const closingRec = closingRecords.find(
+      (r) =>
+        (r.date || '').split('T')[0] === date &&
+        (isMatchPlan(r.planName, prod.name) || (prod.itemCode && r.itemCode === prod.itemCode))
+    );
+
+    const productGrns = grnRecords.filter(
+      (g) =>
+        (g.date || '').split('T')[0] === date &&
+        (isMatchPlan(g.productName, prod.name) || (prod.itemCode && g.itemCode === prod.itemCode))
+    );
+    const grnKg = productGrns.reduce((sum, g) => sum + (g.weightKg || 0), 0) || (closingRec?.grnKg || 0);
+
+    const productAdjs = adjustments.filter(
+      (a) =>
+        (a.date || '').split('T')[0] === date &&
+        (isMatchPlan(a.planName, prod.name) || (prod.itemCode && a.itemCode === prod.itemCode))
+    );
+    const netAdj = productAdjs.reduce((sum, a) => sum + (a.type === 'IN' ? a.weightKg : -a.weightKg), 0);
+
+    const h1Stock = getHMinus1ClosingStock(closingRecords, store, prod.name, date);
+    const openingStock =
+      typeof closingRec?.openingStockKg === 'number' && closingRec.openingStockKg > 0
+        ? closingRec.openingStockKg
+        : typeof h1Stock === 'number'
+        ? h1Stock
+        : 0;
+
+    const totalAvailable = openingStock + grnKg + netAdj;
+
+    // Parting metrics according to user rules
+    const tally =
+      typeof closingRec?.tallyKg === 'number' && closingRec.tallyKg > 0
+        ? closingRec.tallyKg
+        : grnKg > 0
+        ? grnKg
+        : totalAvailable > 0
+        ? totalAvailable
+        : typeof closingRec?.actualClosingStockKg === 'number'
+        ? closingRec.actualClosingStockKg
+        : 0;
+
+    const bruto =
+      typeof closingRec?.brutoKg === 'number' && closingRec.brutoKg > 0
+        ? closingRec.brutoKg
+        : tally;
+
+    const netto =
+      typeof closingRec?.nettoKg === 'number' && closingRec.nettoKg > 0
+        ? closingRec.nettoKg
+        : typeof closingRec?.actualClosingStockKg === 'number' && closingRec.actualClosingStockKg > 0
+        ? closingRec.actualClosingStockKg
+        : bruto > 0
+        ? Math.max(0, bruto - bruto * 0.03125)
+        : 0;
+
+    // 1. berat susut didapat dari tally di ambil netto
+    const beratSusut = tally > 0 ? Math.max(0, tally - netto) : 0;
+
+    // 2. cost didapat dari data cogs
+    const cost = closingRec?.costPerKg || prod.cogsPerKg || 0;
+
+    // 3. value real didapat dari tally di kali cost
+    const valueReal = tally * cost;
+
+    // 4. value process netto di kali cost
+    const valueProcess = netto * cost;
+
+    // 5. cost real didapat dari value real dibagi netto
+    const costReal = netto > 0 ? valueReal / netto : 0;
+
+    // 6. persentase susut didapat dari ((tally - netto)/tally)
+    const persentaseSusut = tally > 0 ? ((tally - netto) / tally) * 100 : 0;
+
+    // 7. susut real didapat dari bruto diambil netto
+    const susutReal = Math.max(0, bruto - netto);
+
+    // 8. sale didapat dari lampiran harga sales
+    const sale = closingRec?.sellingPricePerKg || prod.sellingPricePerKg || 0;
+
+    // 9. GP didapatkan dari(((sale-cost real)/sale)*100%)
+    const gpPercent = sale > 0 && costReal > 0 ? ((sale - costReal) / sale) * 100 : 0;
+
+    // Section Header 1 (Row H1)
+    const h1Row = currentRow;
+    writeCell(ws, h1Row, 0, 'TDN', undefined, { bold: true, align: 'center', bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h1Row, 1, 'BAHAN', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+
+    // Merged Quantity Header
+    writeCell(ws, h1Row, 2, `QUANTITY ${prod.name.toUpperCase()}`, undefined, {
+      bold: true,
+      align: 'center',
+      bg: 'D9E1F2',
+      color: 'C00000',
+      border: 'darkThin',
+    });
+    for (let c = 3; c <= 6; c++) {
+      writeCell(ws, h1Row, c, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    }
+    merges.push({ s: { r: h1Row, c: 2 }, e: { r: h1Row, c: 6 } });
+
+    writeCell(ws, h1Row, 7, 'COST', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: '7030A0', border: 'darkThin' });
+
+    // Merged Value Header
+    writeCell(ws, h1Row, 8, 'VALUE', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h1Row, 9, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    merges.push({ s: { r: h1Row, c: 8 }, e: { r: h1Row, c: 9 } });
+
+    writeCell(ws, h1Row, 10, 'COST REAL', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h1Row, 11, '% SUSUT', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h1Row, 12, 'SUSUT REAL', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h1Row, 13, 'GP', undefined, { bold: true, align: 'center', bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h1Row, 14, 'SALE', undefined, { bold: true, align: 'center', bg: 'D9E1F2', border: 'darkThin' });
+
+    // Section Subheaders (Row H2)
+    const h2Row = h1Row + 1;
+    writeCell(ws, h2Row, 0, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 1, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 2, 'TALLY LABEL', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 3, 'BRUTO', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 4, 'SUSUT', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 5, 'NETTO', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 6, 'SUSUT', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 7, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 8, 'REAL', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 9, 'PROCESS', undefined, { bold: true, align: 'center', bg: 'D9E1F2', color: 'C00000', border: 'darkThin' });
+    writeCell(ws, h2Row, 10, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 11, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 12, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 13, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+    writeCell(ws, h2Row, 14, '', undefined, { bg: 'D9E1F2', border: 'darkThin' });
+
+    // Merges for vertical headers
+    merges.push({ s: { r: h1Row, c: 0 }, e: { r: h2Row, c: 0 } });
+    merges.push({ s: { r: h1Row, c: 1 }, e: { r: h2Row, c: 1 } });
+    merges.push({ s: { r: h1Row, c: 7 }, e: { r: h2Row, c: 7 } });
+    merges.push({ s: { r: h1Row, c: 10 }, e: { r: h2Row, c: 10 } });
+    merges.push({ s: { r: h1Row, c: 11 }, e: { r: h2Row, c: 11 } });
+    merges.push({ s: { r: h1Row, c: 12 }, e: { r: h2Row, c: 12 } });
+    merges.push({ s: { r: h1Row, c: 13 }, e: { r: h2Row, c: 13 } });
+    merges.push({ s: { r: h1Row, c: 14 }, e: { r: h2Row, c: 14 } });
+
+    // Data Row 1 (Primary Entry)
+    const d1Row = h2Row + 1;
+    writeCell(ws, d1Row, 0, sectionNum, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, d1Row, 1, prod.name, undefined, { align: 'left', border: 'thin' });
+    writeCell(ws, d1Row, 2, tally > 0 ? tally : '', undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, d1Row, 3, bruto > 0 ? bruto : '', undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, d1Row, 4, beratSusut > 0 ? beratSusut : '', undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, d1Row, 5, netto > 0 ? netto : '', undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, d1Row, 6, '', undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, d1Row, 7, cost, undefined, { align: 'right', numFmt: '#,##0.00', border: 'thin' });
+    writeCell(ws, d1Row, 8, valueReal > 0 ? valueReal : '-', undefined, { align: 'right', numFmt: '#,##0.00', border: 'thin' });
+    writeCell(ws, d1Row, 9, valueProcess > 0 ? valueProcess : '-', undefined, { align: 'right', numFmt: '#,##0.00', border: 'thin' });
+    writeCell(ws, d1Row, 10, costReal > 0 ? costReal : '#DIV/0!', undefined, { align: 'right', numFmt: costReal > 0 ? '#,##0.00' : undefined, border: 'thin' });
+    writeCell(ws, d1Row, 11, tally > 0 ? `${persentaseSusut.toFixed(2)}%` : '#DIV/0!', undefined, { align: 'right', border: 'thin' });
+    writeCell(ws, d1Row, 12, susutReal > 0 ? susutReal : '-', undefined, { align: 'right', numFmt: susutReal > 0 ? '#,##0.00' : undefined, border: 'thin' });
+    writeCell(ws, d1Row, 13, sale > 0 && costReal > 0 ? `${gpPercent.toFixed(0)}%` : '#DIV/0!', undefined, { align: 'right', bold: true, color: gpPercent < 0 ? 'DC2626' : '047857', border: 'thin' });
+    writeCell(ws, d1Row, 14, sale, undefined, { align: 'right', numFmt: '#,##0.00', border: 'thin' });
+
+    // Additional Batch lines (matching template rows 8, 9, 10)
+    for (let extra = 1; extra <= 3; extra++) {
+      const extraRow = d1Row + extra;
+      writeCell(ws, extraRow, 0, extra === 2 ? prod.plu : '', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 1, prod.name, undefined, { align: 'left', border: 'thin' });
+      writeCell(ws, extraRow, 2, '', undefined, { border: 'thin' });
+      writeCell(ws, extraRow, 3, '', undefined, { border: 'thin' });
+      writeCell(ws, extraRow, 4, '', undefined, { border: 'thin' });
+      writeCell(ws, extraRow, 5, '', undefined, { border: 'thin' });
+      writeCell(ws, extraRow, 6, '', undefined, { border: 'thin' });
+      writeCell(ws, extraRow, 7, cost, undefined, { align: 'right', numFmt: '#,##0.00', border: 'thin' });
+      writeCell(ws, extraRow, 8, '-', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 9, '-', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 10, '#DIV/0!', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 11, '#DIV/0!', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 12, '-', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 13, '#DIV/0!', undefined, { align: 'center', border: 'thin' });
+      writeCell(ws, extraRow, 14, '', undefined, { border: 'thin' });
+    }
+
+    // Total Cut Row
+    const totRow = d1Row + 4;
+    writeCell(ws, totRow, 0, prod.rawBarcode || prod.plu, undefined, { align: 'center', bold: true, border: 'thin' });
+    writeCell(ws, totRow, 1, 'TOTAL', undefined, { align: 'center', bold: true, border: 'thin' });
+    writeCell(ws, totRow, 2, tally > 0 ? tally : '-', undefined, { align: 'right', bold: true, numFmt: tally > 0 ? '#,##0.000' : undefined, border: 'thin' });
+    writeCell(ws, totRow, 3, '', undefined, { border: 'thin' });
+    writeCell(ws, totRow, 4, '', undefined, { border: 'thin' });
+    writeCell(ws, totRow, 5, netto > 0 ? netto : '-', undefined, { align: 'right', bold: true, numFmt: netto > 0 ? '#,##0.000' : undefined, border: 'thin' });
+    writeCell(ws, totRow, 6, '', undefined, { border: 'thin' });
+    writeCell(ws, totRow, 7, '', undefined, { border: 'thin' });
+    writeCell(ws, totRow, 8, valueReal > 0 ? valueReal : '-', undefined, { align: 'right', bold: true, numFmt: valueReal > 0 ? '#,##0.00' : undefined, border: 'thin' });
+    writeCell(ws, totRow, 9, valueProcess > 0 ? valueProcess : '-', undefined, { align: 'right', bold: true, numFmt: valueProcess > 0 ? '#,##0.00' : undefined, border: 'thin' });
+    writeCell(ws, totRow, 10, costReal > 0 ? costReal : '#DIV/0!', undefined, { align: 'right', bold: true, numFmt: costReal > 0 ? '#,##0.00' : undefined, border: 'thin' });
+    writeCell(ws, totRow, 11, tally > 0 ? `${persentaseSusut.toFixed(2)}%` : '#DIV/0!', undefined, { align: 'right', bold: true, border: 'thin' });
+    writeCell(ws, totRow, 12, '', undefined, { border: 'thin' });
+    writeCell(ws, totRow, 13, '', undefined, { border: 'thin' });
+    writeCell(ws, totRow, 14, '', undefined, { border: 'thin' });
+
+    // Sub-summary Box (Below Section)
+    const sb1 = totRow + 2;
+    writeCell(ws, sb1, 1, `${prod.name} :`, undefined, { align: 'left', bold: true });
+    writeCell(ws, sb1, 3, tally > 0 ? tally : '-', undefined, { align: 'right', numFmt: tally > 0 ? '#,##0.000' : undefined });
+    writeCell(ws, sb1, 4, 'KG', undefined, { align: 'left' });
+    writeCell(ws, sb1, 7, 'PENYUSUTAN DARI GD I KE TOKO :', undefined, { align: 'left' });
+    writeCell(ws, sb1, 9, '-', undefined, { align: 'center' });
+
+    const sb2 = sb1 + 1;
+    writeCell(ws, sb2, 1, 'HASIL BERSIH :', undefined, { align: 'left', bold: true });
+    writeCell(ws, sb2, 3, netto > 0 ? netto : '-', undefined, { align: 'right', numFmt: netto > 0 ? '#,##0.000' : undefined });
+    writeCell(ws, sb2, 4, 'KG', undefined, { align: 'left' });
+    writeCell(ws, sb2, 7, 'PENYUSUTAN DARI PENJUALAN :', undefined, { align: 'left' });
+    writeCell(ws, sb2, 9, 0, undefined, { align: 'center' });
+    writeCell(ws, sb2, 12, susutReal > 0 ? susutReal : '#DIV/0!', undefined, { align: 'right', bold: true, numFmt: susutReal > 0 ? '#,##0.00' : undefined });
+
+    const sb3 = sb2 + 1;
+    writeCell(ws, sb3, 1, 'SUSUT :', undefined, { align: 'left', bold: true });
+    writeCell(ws, sb3, 3, susutReal > 0 ? susutReal : '-', undefined, { align: 'right', numFmt: susutReal > 0 ? '#,##0.000' : undefined });
+    writeCell(ws, sb3, 4, 'KG', undefined, { align: 'left' });
+    writeCell(ws, sb3, 12, tally > 0 ? `${persentaseSusut.toFixed(2)}%` : '#DIV/0!', undefined, { align: 'right', bold: true });
+
+    const sb4 = sb3 + 1;
+    writeCell(ws, sb4, 1, 'NETTO :', undefined, { align: 'left' });
+    writeCell(ws, sb4, 3, netto > 0 ? netto : '-', undefined, { align: 'right', numFmt: netto > 0 ? '#,##0.000' : undefined });
+
+    const sb5 = sb4 + 1;
+    writeCell(ws, sb5, 1, 'SELISIH :', undefined, { align: 'left', color: 'DC2626' });
+    writeCell(ws, sb5, 3, beratSusut > 0 ? beratSusut : '-', undefined, { align: 'right', color: 'DC2626', numFmt: beratSusut > 0 ? '#,##0.000' : undefined });
+
+    // Yellow Banner: MODAL ITEM FRESH
+    writeCell(ws, sb5, 5, `MODAL ${prod.name.toUpperCase()} :`, undefined, { bold: true, align: 'center', bg: 'FFFF00', border: 'thin' });
+    writeCell(ws, sb5, 6, '', undefined, { bg: 'FFFF00', border: 'thin' });
+    merges.push({ s: { r: sb5, c: 5 }, e: { r: sb5, c: 6 } });
+
+    writeCell(ws, sb5, 8, valueReal > 0 ? valueReal : '#DIV/0!', undefined, { bold: true, align: 'right', bg: 'FFFF00', numFmt: valueReal > 0 ? '#,##0.00' : undefined, border: 'thin' });
+    writeCell(ws, sb5, 9, valueProcess > 0 ? valueProcess : '#DIV/0!', undefined, { bold: true, align: 'right', bg: 'FFFF00', numFmt: valueProcess > 0 ? '#,##0.00' : undefined, border: 'thin' });
+
+    const sb6 = sb5 + 1;
+    writeCell(ws, sb6, 10, 'AV SUSUT :', undefined, { bold: true, align: 'right' });
+    writeCell(ws, sb6, 11, tally > 0 ? `${persentaseSusut.toFixed(2)}%` : '#DIV/0!', undefined, { bold: true, align: 'center' });
+
+    currentRow = sb6 + 3;
+  });
+
+  ws['!merges'] = merges;
+  ws['!cols'] = [
+    { wch: 8 },  // A: TDN
+    { wch: 26 }, // B: BAHAN
+    { wch: 14 }, // C: TALLY LABEL
+    { wch: 12 }, // D: BRUTO
+    { wch: 12 }, // E: SUSUT
+    { wch: 12 }, // F: NETTO
+    { wch: 12 }, // G: SUSUT
+    { wch: 14 }, // H: COST
+    { wch: 16 }, // I: VALUE REAL
+    { wch: 16 }, // J: VALUE PROCESS
+    { wch: 14 }, // K: COST REAL
+    { wch: 12 }, // L: % SUSUT
+    { wch: 14 }, // M: SUSUT REAL
+    { wch: 10 }, // N: GP
+    { wch: 14 }, // O: SALE
+  ];
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: currentRow, c: 14 } });
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+}
+
+function buildPartingAyamSalesSheet(
+  wb: any,
+  sheetName: string,
+  store: Store,
+  date: string,
+  closingRecords: ClosingPlanRecord[],
+  grnRecords: GrnRecord[],
+  adjustments: StockAdjustment[]
+) {
+  const ws: any = {};
+  const cleanStoreName = store.name.replace(/^TDN\s*/i, '').trim();
+  const prevDate = getPreviousDateStr(date);
+
+  const formatDateLabel = (d: string) => {
+    try {
+      const parts = d.split('-');
+      if (parts.length === 3) {
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+        return `${parseInt(parts[2], 10)}-${monthNames[parseInt(parts[1], 10) - 1]}`;
+      }
+    } catch {}
+    return d;
+  };
+
+  const formatDateFullIndo = (d: string) => {
+    try {
+      const parts = d.split('-');
+      if (parts.length === 3) {
+        const monthNames = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'];
+        return `${parts[2]} ${monthNames[parseInt(parts[1], 10) - 1]} ${parts[0]}`;
+      }
+    } catch {}
+    return d;
+  };
+
+  const prevDateLabel = formatDateLabel(prevDate);
+  const curDateLabel = formatDateLabel(date);
+  const fullDateLabel = formatDateFullIndo(date);
+
+  // Row 1: Green Title Banner (Image 2)
+  const bannerTitle = `LAPORAN STOCK AYAM PARTING FRESH TDN ${cleanStoreName.toUpperCase()} TGL ${fullDateLabel}`;
+  writeCell(ws, 1, 0, bannerTitle, undefined, {
+    bold: true,
+    fontSize: 12,
+    align: 'center',
+    bg: 'A9D08E',
+    color: '000000',
+    border: 'darkThin',
+  });
+  for (let c = 1; c <= 15; c++) {
+    writeCell(ws, 1, c, '', undefined, { bg: 'A9D08E', border: 'darkThin' });
+  }
+
+  // Row 2: Headers (Image 2)
+  const headers = [
+    { text: 'TGL', wch: 10, bg: 'FFC000', color: '000000' },
+    { text: 'Stock Akhir ( Malam )', wch: 20, bg: 'FFFF00', color: '000000' },
+    { text: 'item code', wch: 14, bg: 'FFC000', color: '000000' },
+    { text: 'code', wch: 12, bg: 'FFC000', color: '000000' },
+    { text: 'Item Produk', wch: 30, bg: 'FFC000', color: '000000' },
+    { text: 'Harga', wch: 14, bg: 'FFC000', color: '000000' },
+    { text: 'Tanggal', wch: 12, bg: 'FFC000', color: '000000' },
+    { text: 'STOCK AWAL', wch: 16, bg: 'FFC000', color: '000000' },
+    { text: 'Adj In', wch: 12, bg: 'FFC000', color: '000000' },
+    { text: 'Adj Out', wch: 12, bg: 'FFC000', color: '000000' },
+    { text: 'In By SPB', wch: 14, bg: 'FFC000', color: '000000' },
+    { text: 'Total Real', wch: 16, bg: 'F8CBAD', color: '000000' },
+    { text: 'Penjualan', wch: 14, bg: 'FFC000', color: '000000' },
+    { text: 'Stock Akhir By Sistem', wch: 20, bg: 'FFFF00', color: '000000' },
+    { text: 'Stock Akhir Real', wch: 18, bg: 'FFFF00', color: '000000' },
+    { text: 'SUSUT RETUR', wch: 16, bg: 'FFC000', color: '000000' },
+  ];
+
+  headers.forEach((h, cIdx) => {
+    writeCell(ws, 2, cIdx, h.text, undefined, {
+      bold: true,
+      bg: h.bg,
+      color: h.color,
+      fontSize: 10,
+      align: cIdx === 4 ? 'left' : 'center',
+      border: 'darkThin',
+    });
+  });
+
+  let sumOpening = 0;
+  let sumAdjIn = 0;
+  let sumAdjOut = 0;
+  let sumGrn = 0;
+  let sumTotalReal = 0;
+  let sumSales = 0;
+  let sumStokSistem = 0;
+  let sumStokReal = 0;
+  let sumSusut = 0;
+
+  PARTING_AYAM_CATALOG.forEach((prod, idx) => {
+    const rIdx = 3 + idx;
+    const closingRec = closingRecords.find(
+      (r) =>
+        (r.date || '').split('T')[0] === date &&
+        (isMatchPlan(r.planName, prod.name) || (prod.itemCode && r.itemCode === prod.itemCode))
+    );
+
+    const h1Stock = getHMinus1ClosingStock(closingRecords, store, prod.name, date);
+    const openingStock =
+      typeof closingRec?.openingStockKg === 'number' && closingRec.openingStockKg > 0
+        ? closingRec.openingStockKg
+        : typeof h1Stock === 'number'
+        ? h1Stock
+        : 0;
+
+    const productGrns = grnRecords.filter(
+      (g) =>
+        (g.date || '').split('T')[0] === date &&
+        (isMatchPlan(g.productName, prod.name) || (prod.itemCode && g.itemCode === prod.itemCode))
+    );
+    const grnKg = productGrns.reduce((sum, g) => sum + (g.weightKg || 0), 0) || (closingRec?.grnKg || 0);
+
+    const productAdjs = adjustments.filter(
+      (a) =>
+        (a.date || '').split('T')[0] === date &&
+        (isMatchPlan(a.planName, prod.name) || (prod.itemCode && a.itemCode === prod.itemCode))
+    );
+    const adjIn = productAdjs.filter((a) => a.type === 'IN').reduce((sum, a) => sum + (a.weightKg || 0), 0);
+    const adjOut = productAdjs.filter((a) => a.type === 'OUT').reduce((sum, a) => sum + (a.weightKg || 0), 0);
+
+    const totalReal = openingStock + adjIn - adjOut + grnKg;
+    const salesKg = closingRec?.salesKg || 0;
+    const stockBySistem = Math.max(0, totalReal - salesKg);
+    const isClosed = Boolean(closingRec && typeof closingRec.actualClosingStockKg === 'number');
+    const stockReal = isClosed ? closingRec!.actualClosingStockKg : 0;
+    const susutRetur = isClosed ? Math.max(0, stockBySistem - stockReal) : 0;
+
+    sumOpening += openingStock;
+    sumAdjIn += adjIn;
+    sumAdjOut += adjOut;
+    sumGrn += grnKg;
+    sumTotalReal += totalReal;
+    sumSales += salesKg;
+    sumStokSistem += stockBySistem;
+    sumStokReal += stockReal;
+    sumSusut += susutRetur;
+
+    writeCell(ws, rIdx, 0, idx === 0 ? prevDateLabel : '', undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rIdx, 1, openingStock, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FFFF00', border: 'thin' });
+    writeCell(ws, rIdx, 2, prod.itemCode, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rIdx, 3, prod.plu, undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rIdx, 4, prod.name, undefined, { align: 'left', bold: true, border: 'thin' });
+    writeCell(ws, rIdx, 5, prod.sellingPricePerKg || 0, undefined, { align: 'right', numFmt: '#,##0', border: 'thin' });
+    writeCell(ws, rIdx, 6, idx === 0 ? curDateLabel : '', undefined, { align: 'center', border: 'thin' });
+    writeCell(ws, rIdx, 7, openingStock, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rIdx, 8, adjIn, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rIdx, 9, adjOut, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rIdx, 10, grnKg, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rIdx, 11, totalReal, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FCE4D6', bold: true, border: 'thin' });
+    writeCell(ws, rIdx, 12, salesKg, undefined, { align: 'right', numFmt: '#,##0.000', border: 'thin' });
+    writeCell(ws, rIdx, 13, stockBySistem, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FFFF00', bold: true, border: 'thin' });
+    writeCell(ws, rIdx, 14, stockReal, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FFFF00', bold: true, border: 'thin' });
+    writeCell(ws, rIdx, 15, susutRetur, undefined, { align: 'right', numFmt: '#,##0.000', bg: 'FFFF00', bold: true, color: susutRetur > 0 ? 'DC2626' : '000000', border: 'thin' });
+  });
+
+  // Total Footer
+  const totRow = 3 + PARTING_AYAM_CATALOG.length;
+  writeCell(ws, totRow, 0, 'TOTAL', undefined, { align: 'center', bold: true, bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 1, sumOpening, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'FFFF00', border: 'darkThin' });
+  writeCell(ws, totRow, 2, '', undefined, { bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 3, '', undefined, { bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 4, 'TOTAL AYAM PARTING FRESH', undefined, { align: 'left', bold: true, bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 5, '', undefined, { bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 6, '', undefined, { bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 7, sumOpening, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 8, sumAdjIn, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 9, sumAdjOut, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 10, sumGrn, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 11, sumTotalReal, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'FCE4D6', border: 'darkThin' });
+  writeCell(ws, totRow, 12, sumSales, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'E2E8F0', border: 'darkThin' });
+  writeCell(ws, totRow, 13, sumStokSistem, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'FFFF00', border: 'darkThin' });
+  writeCell(ws, totRow, 14, sumStokReal, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'FFFF00', border: 'darkThin' });
+  writeCell(ws, totRow, 15, sumSusut, undefined, { align: 'right', bold: true, numFmt: '#,##0.000', bg: 'FFFF00', color: sumSusut > 0 ? 'DC2626' : '000000', border: 'darkThin' });
+
+  ws['!merges'] = [
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } }
+  ];
+  ws['!cols'] = headers.map((h) => ({ wch: h.wch }));
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: 15 } });
+
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+}
+
+function buildPartingAyamReturnSheet(wb: any, store: Store, date: string) {
+  const ws: any = {};
+  const cleanStoreName = store.name.replace(/^TDN\s*/i, '').trim();
+
+  writeCell(ws, 1, 0, `BERITA ACARA RETURN & SUSUT AYAM PARTING FRESH`, undefined, { bold: true, fontSize: 13, align: 'center', bg: '0284C7', color: 'FFFFFF' });
+  for (let c = 1; c <= 8; c++) {
+    writeCell(ws, 1, c, '', undefined, { bg: '0284C7' });
+  }
+
+  writeCell(ws, 3, 0, 'Cabang Toko :', undefined, { bold: true });
+  writeCell(ws, 3, 2, `TDN ${cleanStoreName.toUpperCase()}`, undefined, { bold: true });
+  writeCell(ws, 4, 0, 'Tanggal Berita Acara :', undefined, { bold: true });
+  writeCell(ws, 4, 2, date, undefined, { bold: true });
+
+  const headers = [
+    { text: 'NO', wch: 6 },
+    { text: 'KODE ITEM', wch: 14 },
+    { text: 'NAMA PRODUK', wch: 30 },
+    { text: 'BERAT (KG)', wch: 14 },
+    { text: 'JENIS KASUS (SUSUT/RETUR/KERUSAKAN)', wch: 34 },
+    { text: 'KETERANGAN / PENYEBAB', wch: 34 },
+    { text: 'PARAF BUTCHER', wch: 16 },
+    { text: 'PARAF ADMIN TOKO', wch: 18 },
+    { text: 'APPROVAL MD', wch: 16 },
+  ];
+
+  headers.forEach((h, cIdx) => {
+    writeCell(ws, 6, cIdx, h.text, undefined, { bold: true, align: 'center', bg: 'F1F5F9', border: 'darkThin' });
+  });
+
+  for (let r = 7; r <= 18; r++) {
+    writeCell(ws, r, 0, r - 6, undefined, { align: 'center', border: 'thin' });
+    for (let c = 1; c <= 8; c++) {
+      writeCell(ws, r, c, '', undefined, { border: 'thin' });
+    }
+  }
+
+  ws['!merges'] = [{ s: { r: 1, c: 0 }, e: { r: 1, c: 8 } }];
+  ws['!cols'] = headers.map((h) => ({ wch: h.wch }));
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 20, c: 8 } });
+
+  XLSX.utils.book_append_sheet(wb, ws, 'BA return dan susut');
+}
+
+export function exportSosisKentangDoriExcel(
+  store: Store,
+  date: string,
+  closingRecords: ClosingPlanRecord[],
+  grnRecords: GrnRecord[] = [],
+  adjustments: StockAdjustment[] = []
+) {
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: SOSIS & KENTANG (15 items)
+  buildNonMeatSheet(
+    wb,
+    'SOSIS & KENTANG',
+    `LAPORAN STOCK SOSIS & KENTANG TDN ${store.name.replace(/^TDN\s*/i, '')} ${date}`,
+    'F59E0B',
+    SOSIS_KENTANG_CATALOG,
+    store,
+    date,
+    closingRecords,
+    grnRecords,
+    adjustments
+  );
+
+  // Sheet 2: FILLET DORI (6 items)
+  buildNonMeatSheet(
+    wb,
+    'FILLET DORI',
+    `LAPORAN STOCK FILLET DORI TDN ${store.name.replace(/^TDN\s*/i, '')} ${date}`,
+    'EA580C',
+    FILLET_DORI_CATALOG,
+    store,
+    date,
+    closingRecords,
+    grnRecords,
+    adjustments
+  );
+
+  const cleanStoreName = store.name.replace(/[/\\?%*:|"<>]/g, '-').trim();
+  const filename = `LAPORAN STOCK SOSIS KENTANG & DORI - ${cleanStoreName} - ${date}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportPartingAyamExcel(
+  store: Store,
+  date: string,
+  closingRecords: ClosingPlanRecord[],
+  grnRecords: GrnRecord[] = [],
+  adjustments: StockAdjustment[] = []
+) {
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: parting ayam fresh ALL TDN (Yield, Susut, COGS, Value Real, Cost Real, % Susut, GP, Sale)
+  buildPartingAyamYieldSheet(
+    wb,
+    'parting ayam fresh ALL TDN',
+    store,
+    date,
+    closingRecords,
+    grnRecords,
+    adjustments
+  );
+
+  // Sheet 2: BA return dan susut
+  buildPartingAyamReturnSheet(wb, store, date);
+
+  // Sheet 3: SALES (Stock Akhir Malam, SPB/GRN, Adj In/Out, Total Real, Penjualan, Stock Akhir By Sistem, Stock Akhir Real, Susut Retur)
+  buildPartingAyamSalesSheet(
+    wb,
+    'SALES',
+    store,
+    date,
+    closingRecords,
+    grnRecords,
+    adjustments
+  );
+
+  const cleanStoreName = store.name.replace(/[/\\?%*:|"<>]/g, '-').trim();
+  const filename = `REPORT AYAM FRESH ${cleanStoreName.toUpperCase()} ${date}.xlsx`;
+  XLSX.writeFile(wb, filename);
 }

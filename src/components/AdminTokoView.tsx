@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ThawingItem,
   FabricationSegment,
@@ -8,20 +8,28 @@ import {
   UserAccount,
   Store,
   DailyClosingReport,
-  ReportPhotoAttachment
+  ReportPhotoAttachment,
+  GrnRecord,
+  ReportCategory,
 } from '../types';
 import ExcelReportViewer from './ExcelReportViewer';
+import NonMeatReportTable from './NonMeatReportTable';
 import AdminTrainingAndTargetView from './AdminTrainingAndTargetView';
 import SavedDataViewerModal from './SavedDataViewerModal';
+import MissedSosisKentangForm from './MissedSosisKentangForm';
+import MissedPartingAyamForm from './MissedPartingAyamForm';
 import { matchStoreEntity } from '../utils/reportCalculations';
 import { processHighResImage } from '../utils/imageCompressor';
 import { getDeterministicClosingRecordId, isMatchPlan } from '../utils/storeHelper';
+import { getPreviousDateStr, findHMinus1ClosingRecord } from '../utils/dateUtils';
 import {
   exportStoreDailyLaporanExcel,
   exportStoreDailyLaporanCSV,
+  exportSosisKentangDoriExcel,
+  exportPartingAyamExcel,
   downloadCSV
 } from '../utils/excelExport';
-import { upsertRecordToSheets } from '../utils/sheetsApi';
+import { SOSIS_KENTANG_DORI_CATALOG, PARTING_AYAM_CATALOG } from '../utils/productCatalog';
 import { deduplicateThawingItems } from '../utils/db';
 
 export interface UnifiedBahanRow {
@@ -96,6 +104,8 @@ interface AdminTokoViewProps {
   onUpdateCogs?: (updatedCogs: CogsMaster[]) => void;
   safeThawingLossPercent: number;
   onUpdateSalesPrediction?: (newTargetKg: number) => void;
+  grnRecords?: GrnRecord[];
+  onSaveGrn?: (records: GrnRecord[] | GrnRecord) => void;
 }
 
 export default function AdminTokoView({
@@ -107,6 +117,8 @@ export default function AdminTokoView({
   adjustments,
   cogsList,
   reports = [],
+  grnRecords = [],
+  onSaveGrn,
   onAddAdjustment,
   onDeleteAdjustment,
   onDeleteClosingRecord,
@@ -132,11 +144,11 @@ export default function AdminTokoView({
     const datesSet = new Set<string>();
     (items || []).forEach((i) => {
       const d = (i.createdAt || i.thawingStartTime || '').split('T')[0];
-      if (d && d !== '2026-08-29') datesSet.add(d);
+      if (d) datesSet.add(d);
     });
     (closingRecords || []).forEach((c) => {
       const d = (c.date || c.timestamp || '').split('T')[0];
-      if (d && d !== '2026-08-29') datesSet.add(d);
+      if (d) datesSet.add(d);
     });
     return Array.from(datesSet).sort().reverse();
   }, [items, closingRecords]);
@@ -171,6 +183,76 @@ export default function AdminTokoView({
   const [unifiedNotes, setUnifiedNotes] = useState('');
   const [editingClosingId, setEditingClosingId] = useState<string | null>(null);
   const [closingInputMsg, setClosingInputMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [missedReportCategory, setMissedReportCategory] = useState<ReportCategory>('DAGING');
+
+  // Filter saved beef closing records for selected date
+  const savedMeatClosings = useMemo(() => {
+    return (closingRecords || []).filter(
+      (c) =>
+        matchStoreEntity(c.storeId, currentStore) &&
+        (c.date || c.timestamp || '').startsWith(selectedDate) &&
+        c.category !== 'PARTING_AYAM' &&
+        c.reportCategory !== 'PARTING_AYAM' &&
+        c.reportCategory !== 'KENTANG_SOSIS_DORI' &&
+        c.category !== 'SOSIS & KENTANG' &&
+        c.category !== 'FILLET DORI' &&
+        !PARTING_AYAM_CATALOG.some((p) => isMatchPlan(p.name, c.planName)) &&
+        !SOSIS_KENTANG_DORI_CATALOG.some((p) => isMatchPlan(p.name, c.planName))
+    );
+  }, [closingRecords, currentStore, selectedDate]);
+
+  // Active plan & H-1 record lookup (H-1 dari selectedDate)
+  const activePlanName = unifiedPlanSelect === 'CUSTOM' ? unifiedCustomPlan.trim() : unifiedPlanSelect;
+  const h1DateStr = useMemo(() => getPreviousDateStr(selectedDate), [selectedDate]);
+  const h1ClosingRec = useMemo(() => {
+    if (!activePlanName) return undefined;
+    return findHMinus1ClosingRecord(closingRecords || [], currentStore, activePlanName, selectedDate);
+  }, [closingRecords, currentStore, activePlanName, selectedDate]);
+
+  // Auto-sync sisa kemarin secara DIRECT & TERISOLASI per tanggal:
+  // Aturan Bisnis: Hanya data dari H-1 (tepat 1 hari kalender sebelum selectedDate)
+  // yang baru terhitung menjadi sisa kemarin / stock awal tanggal selectedDate.
+  // Jika H-1 belum diisi, sisa kemarin tetap 0 (tidak melompat dari H-2 atau H-3).
+  useEffect(() => {
+    if (editingClosingId) return;
+
+    const plan = unifiedPlanSelect === 'CUSTOM' ? unifiedCustomPlan.trim() : unifiedPlanSelect;
+    if (!plan) return;
+
+    // 1. Cek apakah tanggal terpilih sudah memiliki record closing
+    const existingForDate = (closingRecords || []).find(
+      (c) =>
+        matchStoreEntity(c.storeId, currentStore) &&
+        (c.date || c.timestamp || '').startsWith(selectedDate) &&
+        isMatchPlan(c.planName, plan)
+    );
+
+    if (existingForDate) {
+      // Jika record hari ini sisa kemarin-nya masih 0 tapi sekarang data H-1 sudah tersedia:
+      const effectiveOpening = (existingForDate.openingStockKg !== undefined && existingForDate.openingStockKg > 0)
+        ? existingForDate.openingStockKg
+        : (h1ClosingRec?.actualClosingStockKg !== undefined ? h1ClosingRec.actualClosingStockKg : (existingForDate.openingStockKg ?? 0));
+      setUnifiedSisaKemarin(String(effectiveOpening));
+      setUnifiedPenjualanSales(existingForDate.salesKg !== undefined ? String(existingForDate.salesKg) : '');
+      setUnifiedTimbanganSisaFisik(existingForDate.actualClosingStockKg !== undefined ? String(existingForDate.actualClosingStockKg) : '');
+      setUnifiedFotoClosing(existingForDate.photoUrl || '');
+      setUnifiedNotes(existingForDate.note || '');
+      return;
+    }
+
+    // 2. Direct isolation: Hanya jika hari tepat sebelumnya (selectedDate - 1, H-1) memiliki closing,
+    // sisa closing hari kemarin otomatis menjadi sisa kemarin hari ini.
+    if (h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number') {
+      setUnifiedSisaKemarin(String(h1ClosingRec.actualClosingStockKg));
+    } else {
+      setUnifiedSisaKemarin('0');
+    }
+
+    setUnifiedPenjualanSales('');
+    setUnifiedTimbanganSisaFisik('');
+    setUnifiedFotoClosing('');
+    setUnifiedNotes('');
+  }, [selectedDate, unifiedPlanSelect, unifiedCustomPlan, closingRecords, currentStore.id, editingClosingId, h1ClosingRec]);
 
   // Derived Live Calculations for Unified Form (Semua Otomatis Terisi)
   const totalTally = useMemo(() => {
@@ -265,6 +347,7 @@ export default function AdminTokoView({
   const [customReason, setCustomReason] = useState('');
   const [adjSuccess, setAdjSuccess] = useState(false);
   const [adjError, setAdjError] = useState('');
+  const [adminReportCategory, setAdminReportCategory] = useState<ReportCategory>('DAGING');
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
@@ -432,15 +515,17 @@ export default function AdminTokoView({
       (b) => b.bahan.trim() || (parseFloat(b.tally) || 0) > 0 || (parseFloat(b.netto) || 0) > 0
     );
 
-    // If updating or re-saving, find previous unified items for this plan and clean them up
-    const previousUnifiedItemIds = (items || [])
-      .filter(
-        (i) =>
-          matchStoreEntity(i.storeId, currentStore) &&
-          (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate) &&
-          isMatchPlan(i.plannedFabrication, effectivePlan)
-      )
-      .map((i) => i.id);
+    // Hanya hapus item lama jika pengguna secara eksplisit sedang meng-edit (bukan menambah bahan baru)
+    const previousUnifiedItemIds = editingClosingId
+      ? (items || [])
+          .filter(
+            (i) =>
+              matchStoreEntity(i.storeId, currentStore) &&
+              (i.createdAt || i.thawingStartTime || '').startsWith(selectedDate) &&
+              isMatchPlan(i.plannedFabrication, effectivePlan)
+          )
+          .map((i) => i.id)
+      : [];
 
     if (previousUnifiedItemIds.length > 0 && onDeleteItem) {
       previousUnifiedItemIds.forEach((id) => onDeleteItem(id));
@@ -511,7 +596,6 @@ export default function AdminTokoView({
     };
 
     onSaveClosingRecord(recordToSave);
-    upsertRecordToSheets('closing_plan_records', recordToSave);
 
     // 3. Compile & Finalize DailyClosingReport agar Riwayat Harian & Laporan Excel auto-terisi
     const currentStoreClosings = (closingRecords || []).filter(
@@ -654,11 +738,10 @@ export default function AdminTokoView({
     if (onSaveDailyReport) {
       onSaveDailyReport(finalizedReport);
     }
-    upsertRecordToSheets('daily_closing_reports', finalizedReport);
 
     setClosingInputMsg({
       type: 'success',
-      text: `Data terpadu "${effectivePlan}" tanggal ${selectedDate} berhasil disimpan! Data bahan (${validBahan.length} item), closing fisik (${sisaFisikNum.toFixed(3)} Kg), susut proses (${susutProsesKg.toFixed(3)} Kg) & susut jual (${susutJualKg.toFixed(3)} Kg) otomatis tersimpan dan terhubung ke Riwayat Harian, Laporan Excel & Google Spreadsheet!`,
+      text: `Data terpadu "${effectivePlan}" tanggal ${selectedDate} berhasil disimpan! Data bahan (${validBahan.length} item), closing fisik (${sisaFisikNum.toFixed(3)} Kg), susut proses (${susutProsesKg.toFixed(3)} Kg) & susut jual (${susutJualKg.toFixed(3)} Kg) otomatis tersimpan dan terhubung ke Riwayat Harian, Laporan Excel & Sistem!`,
     });
 
     // Reset Form
@@ -677,6 +760,28 @@ export default function AdminTokoView({
     if (rec.date) {
       setSelectedDate(rec.date.split('T')[0]);
     }
+
+    const isParting =
+      rec.reportCategory === 'PARTING_AYAM' ||
+      rec.category === 'PARTING_AYAM' ||
+      PARTING_AYAM_CATALOG.some((p) => isMatchPlan(p.name, rec.planName));
+    const isSosisKentang =
+      rec.reportCategory === 'KENTANG_SOSIS_DORI' ||
+      rec.category === 'SOSIS & KENTANG' ||
+      rec.category === 'FILLET DORI' ||
+      SOSIS_KENTANG_DORI_CATALOG.some((p) => isMatchPlan(p.name, rec.planName));
+
+    if (isParting) {
+      setMissedReportCategory('PARTING_AYAM');
+      return;
+    }
+
+    if (isSosisKentang) {
+      setMissedReportCategory('KENTANG_SOSIS_DORI');
+      return;
+    }
+
+    setMissedReportCategory('DAGING');
     setEditingClosingId(rec.id);
 
     // Check if plan matches standard plans
@@ -1121,6 +1226,51 @@ export default function AdminTokoView({
                 </div>
               </div>
             </div>
+
+            {/* Category Switcher in Input Laporan Terlewat */}
+            <div className="mt-4 pt-4 border-t border-amber-100 flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-black uppercase tracking-wider text-slate-500 mr-1">
+                Pilih Kategori Input Laporan:
+              </span>
+              <button
+                type="button"
+                onClick={() => setMissedReportCategory('DAGING')}
+                className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                  missedReportCategory === 'DAGING'
+                    ? 'bg-red-700 text-white shadow-sm ring-2 ring-red-400'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <span>🥩</span>
+                <span>Laporan Daging Fresh</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMissedReportCategory('KENTANG_SOSIS_DORI')}
+                className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                  missedReportCategory === 'KENTANG_SOSIS_DORI'
+                    ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-400'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <span>🌭🍟</span>
+                <span>Laporan Kentang, Sosis & Dori</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMissedReportCategory('PARTING_AYAM')}
+                className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                  missedReportCategory === 'PARTING_AYAM'
+                    ? 'bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-400'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <span>🍗</span>
+                <span>Laporan Parting Ayam</span>
+              </button>
+            </div>
           </div>
 
           {/* Notifications */}
@@ -1141,10 +1291,11 @@ export default function AdminTokoView({
             </div>
           )}
 
-
-
-          {/* UNIFIED INPUT FORM (Rencana Potong + Bahan + Closing) */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 shadow-xs">
+          {/* TAB 1: LAPORAN TERLEWAT DAGING FRESH */}
+          {missedReportCategory === 'DAGING' && (
+            <>
+              {/* UNIFIED INPUT FORM (Rencana Potong + Bahan + Closing) */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 shadow-xs">
             {/* Form Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-5 border-b border-slate-100">
               <div>
@@ -1228,7 +1379,7 @@ export default function AdminTokoView({
                       </div>
                       <div>
                         <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          Kategori Pabrikasi
+                          Kategori
                         </label>
                         <select
                           value={unifiedCategory}
@@ -1436,19 +1587,45 @@ export default function AdminTokoView({
               <div className="bg-slate-50/90 border border-slate-200 rounded-xl p-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-black text-slate-900 mb-1 uppercase tracking-wide">
-                      Sisa Kemarin (Stok Awal) [Kg]
-                    </label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0.000"
-                      value={unifiedSisaKemarin}
-                      onChange={(e) => setUnifiedSisaKemarin(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500"
-                    />
+                    <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
+                      <label className="block text-xs font-black text-slate-900 uppercase tracking-wide">
+                        Sisa Kemarin (Stok Awal) [Kg]
+                      </label>
+                      {h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number' ? (
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded border border-emerald-300">
+                          ✓ Dari H-1 ({h1DateStr}): {Number(h1ClosingRec.actualClosingStockKg).toFixed(3)} Kg
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-slate-100 text-slate-600 font-medium px-2 py-0.5 rounded border border-slate-200">
+                          H-1 ({h1DateStr}) belum ada closing
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        step="0.001"
+                        placeholder="0.000"
+                        value={unifiedSisaKemarin}
+                        onChange={(e) => setUnifiedSisaKemarin(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500"
+                      />
+                      {h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number' && (
+                        <button
+                          type="button"
+                          onClick={() => setUnifiedSisaKemarin(String(h1ClosingRec.actualClosingStockKg))}
+                          className="px-2.5 py-2.5 text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl whitespace-nowrap transition cursor-pointer"
+                          title="Sinkronkan ulang dengan closing H-1"
+                        >
+                          Sync H-1
+                        </button>
+                      )}
+                    </div>
                     <p className="text-[10px] text-slate-500 mt-1">
-                      Stok sisa display atau carryover dari hari kemarin.
+                      {h1ClosingRec && typeof h1ClosingRec.actualClosingStockKg === 'number'
+                        ? `Data H-1 (${h1DateStr}) terhitung otomatis menjadi sisa kemarin hari ini.`
+                        : `Hanya data dari H-1 (${h1DateStr}) yang terhitung. Belum ada data = 0.000 Kg.`
+                      }
                     </p>
                   </div>
 
@@ -1677,26 +1854,245 @@ export default function AdminTokoView({
               </div>
             </form>
           </div>
-        </div>
+
+          {/* DAFTAR CLOSING DAGING TERSIMPAN TANGGAL INI */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-4 border-b border-slate-100">
+              <div>
+                <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Daftar Laporan Closing Daging Tersimpan ({selectedDate})
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Menampilkan {savedMeatClosings.length} item closing daging yang tercatat pada tanggal {selectedDate}.
+                </p>
+              </div>
+            </div>
+
+            {savedMeatClosings.length === 0 ? (
+              <div className="py-8 text-center text-slate-400 text-xs">
+                Belum ada data closing daging yang tersimpan untuk tanggal {selectedDate}. Gunakan formulir di atas untuk mengisi laporan terlewat.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200 text-[11px]">
+                      <th className="py-2.5 px-3">Rencana Potong</th>
+                      <th className="py-2.5 px-2">Kategori</th>
+                      <th className="py-2.5 px-2 text-right">Sisa Kemarin</th>
+                      <th className="py-2.5 px-2 text-right">Bahan Diolah</th>
+                      <th className="py-2.5 px-2 text-right">Sales</th>
+                      <th className="py-2.5 px-2 text-right">Sisa Sistem</th>
+                      <th className="py-2.5 px-2 text-right">Sisa Fisik</th>
+                      <th className="py-2.5 px-2 text-right">Susut Jual</th>
+                      <th className="py-2.5 px-2 text-center">Foto</th>
+                      <th className="py-2.5 px-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {savedMeatClosings.map((rec) => (
+                      <tr key={rec.id} className="hover:bg-slate-50/60 transition">
+                        <td className="py-2 px-3 font-bold text-slate-900">{rec.planName}</td>
+                        <td className="py-2 px-2 text-slate-600 text-[11px]">{rec.category || '-'}</td>
+                        <td className="py-2 px-2 text-right font-mono">{rec.openingStockKg?.toFixed(3) || '0.000'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-emerald-700">{rec.newProcessedKg?.toFixed(3) || '0.000'}</td>
+                        <td className="py-2 px-2 text-right font-mono">{rec.salesKg?.toFixed(3) || '0.000'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-blue-800">{rec.closingStockBySystemKg?.toFixed(3) || '0.000'}</td>
+                        <td className="py-2 px-2 text-right font-mono font-bold text-emerald-800">{rec.actualClosingStockKg?.toFixed(3) || '0.000'}</td>
+                        <td className={`py-2 px-2 text-right font-mono font-bold ${
+                          (rec.susutJualKg || 0) > 0 ? 'text-rose-600' : 'text-slate-600'
+                        }`}>
+                          {rec.susutJualKg?.toFixed(3) || '0.000'}
+                        </td>
+                        <td className="py-2 px-2 text-center">
+                          {rec.photoUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => setZoomedPhotoUrl({ url: rec.photoUrl, title: `Bukti Closing: ${rec.planName}` })}
+                              className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-blue-700 cursor-pointer transition"
+                              title="Lihat Foto"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleEditClosing(rec)}
+                              className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 transition cursor-pointer"
+                              title="Koreksi / Edit"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm(`Hapus closing daging "${rec.planName}" tanggal ${selectedDate}?`)) {
+                                  onDeleteClosingRecord?.(rec.id);
+                                  setClosingInputMsg({ type: 'success', text: `Data "${rec.planName}" tanggal ${selectedDate} dihapus.` });
+                                }
+                              }}
+                              className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 transition cursor-pointer"
+                              title="Hapus"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       )}
+
+      {/* TAB 2: LAPORAN TERLEWAT KENTANG, SOSIS & DORI */}
+      {missedReportCategory === 'KENTANG_SOSIS_DORI' && (
+        <MissedSosisKentangForm
+          currentStore={currentStore}
+          currentUser={currentUser}
+          selectedDate={selectedDate}
+          closingRecords={closingRecords}
+          grnRecords={grnRecords}
+          adjustments={adjustments}
+          onSaveClosingRecord={onSaveClosingRecord!}
+          onSaveGrn={onSaveGrn}
+          onDeleteClosingRecord={onDeleteClosingRecord}
+          onViewPhoto={(url, title) => setZoomedPhotoUrl({ url, title })}
+          onNotifyMsg={setClosingInputMsg}
+        />
+      )}
+
+      {/* TAB 3: LAPORAN TERLEWAT PARTING AYAM */}
+      {missedReportCategory === 'PARTING_AYAM' && (
+        <MissedPartingAyamForm
+          currentStore={currentStore}
+          currentUser={currentUser}
+          selectedDate={selectedDate}
+          closingRecords={closingRecords}
+          grnRecords={grnRecords}
+          adjustments={adjustments}
+          onSaveClosingRecord={onSaveClosingRecord!}
+          onSaveGrn={onSaveGrn}
+          onDeleteClosingRecord={onDeleteClosingRecord}
+          onViewPhoto={(url, title) => setZoomedPhotoUrl({ url, title })}
+          onNotifyMsg={setClosingInputMsg}
+        />
+      )}
+    </div>
+  )}
 
       {/* ========================================================================= */}
       {/* TAB 0: EXCEL REPORT VIEWER (EXACT REPLICA OF USER SPREADSHEET) */}
       {/* ========================================================================= */}
       {activeTab === 'excel' && (
         <div className="space-y-4">
-          <ExcelReportViewer
-            currentStore={currentStore}
-            selectedDate={selectedDate}
-            onDateChange={setSelectedDate}
-            items={items}
-            segments={segments}
-            closingRecords={closingRecords}
-            adjustments={adjustments}
-            cogsList={cogsList}
-            currentUser={currentUser}
-            onUpdateCogs={currentUser?.role === 'md' ? onUpdateCogs : undefined}
-          />
+          {/* Category Navigation Bar for Admin Report */}
+          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                Kategori Laporan Toko:
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setAdminReportCategory('DAGING')}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                    adminReportCategory === 'DAGING'
+                      ? 'bg-red-600 text-white shadow-sm ring-2 ring-red-300'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="text-base">🥩</span>
+                  <span>Laporan Daging Fresh</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setAdminReportCategory('KENTANG_SOSIS_DORI')}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                    adminReportCategory === 'KENTANG_SOSIS_DORI'
+                      ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-300'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="text-base">🌭🍟</span>
+                  <span>Laporan Kentang, Sosis & Dori</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setAdminReportCategory('PARTING_AYAM')}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                    adminReportCategory === 'PARTING_AYAM'
+                      ? 'bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-300'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="text-base">🍗</span>
+                  <span>Laporan Parting Ayam</span>
+                </button>
+              </div>
+            </div>
+
+            {adminReportCategory !== 'DAGING' && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (adminReportCategory === 'KENTANG_SOSIS_DORI') {
+                      exportSosisKentangDoriExcel(currentStore, selectedDate, closingRecords, grnRecords, adjustments);
+                    } else {
+                      exportPartingAyamExcel(currentStore, selectedDate, closingRecords, grnRecords, adjustments);
+                    }
+                  }}
+                  className="px-4 py-2 bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download Excel {adminReportCategory === 'KENTANG_SOSIS_DORI' ? 'Sosis Kentang Dori' : 'Parting Ayam'}</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {adminReportCategory === 'DAGING' ? (
+            <ExcelReportViewer
+              currentStore={currentStore}
+              selectedDate={selectedDate}
+              onDateChange={setSelectedDate}
+              items={items}
+              segments={segments}
+              closingRecords={closingRecords}
+              adjustments={adjustments}
+              cogsList={cogsList}
+              currentUser={currentUser}
+              onUpdateCogs={currentUser?.role === 'md' ? onUpdateCogs : undefined}
+            />
+          ) : (
+            <NonMeatReportTable
+              category={adminReportCategory}
+              currentStore={currentStore}
+              selectedDate={selectedDate}
+              closingRecords={closingRecords}
+              grnRecords={grnRecords}
+              adjustments={adjustments}
+              onExportExcel={() => {
+                if (adminReportCategory === 'KENTANG_SOSIS_DORI') {
+                  exportSosisKentangDoriExcel(currentStore, selectedDate, closingRecords, grnRecords, adjustments);
+                } else {
+                  exportPartingAyamExcel(currentStore, selectedDate, closingRecords, grnRecords, adjustments);
+                }
+              }}
+            />
+          )}
         </div>
       )}
 
@@ -1947,18 +2343,34 @@ export default function AdminTokoView({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Daging / Rencana Potong:
+                  Produk / Item Penyesuaian (Daging, Kentang Sosis Dori & Ayam):
                 </label>
                 <select
                   value={adjMeatName}
                   onChange={(e) => setAdjMeatName(e.target.value)}
                   className="w-full text-xs p-2.5 border border-slate-300 rounded-lg bg-white font-semibold"
                 >
-                  {STANDARD_PLANS.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name} ({p.category})
-                    </option>
-                  ))}
+                  <optgroup label="🥩 DAGING FRESH">
+                    {STANDARD_PLANS.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name} ({p.category})
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="🌭🍟 KENTANG, SOSIS & DORI">
+                    {SOSIS_KENTANG_DORI_CATALOG.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name} ({p.itemCode})
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="🍗 PARTING AYAM">
+                    {PARTING_AYAM_CATALOG.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name} ({p.itemCode})
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
 
@@ -2205,7 +2617,7 @@ export default function AdminTokoView({
                   Rp {totalKerugianRupiahSusutProses.toLocaleString('id-ID')}
                 </div>
                 <span className="text-[11px] text-amber-700 block mt-1">
-                  {totalSusutProsesHariIni.toFixed(3)} Kg susut pabrikasi
+                  {totalSusutProsesHariIni.toFixed(3)} Kg susut proses
                 </span>
               </div>
 

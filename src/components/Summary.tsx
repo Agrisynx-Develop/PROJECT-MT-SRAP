@@ -73,10 +73,10 @@ export default function Summary({
       {/* Title */}
       <div>
         <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-          📊 Summary & Analisis Pabrikasi
+          📊 Summary & Analisis Produksi Daging
         </h1>
         <p className="text-slate-500 text-sm mt-1">
-          Ringkasan berat, persentase susut proses (thawing & pabrikasi), susut jual (selisih stok sistem vs closing fisik butcher), serta rincian realisasi sales & harga per kg tiap bahan baku.
+          Ringkasan berat, persentase susut proses (thawing & potong), susut jual (selisih stok sistem vs closing fisik butcher), serta rincian realisasi sales & harga per kg tiap bahan baku.
         </p>
       </div>
 
@@ -96,7 +96,7 @@ export default function Summary({
               </span>
             </div>
             <p className="text-xs mt-1 text-rose-800 leading-relaxed">
-              Hasil analisis menunjukkan persentase penyusutan daging (Susut Proses Thawing/Pabrikasi: <strong>{totalProcessLossPercent.toFixed(2)}%</strong> | Susut Display: <strong>{totalSusutJualPercent.toFixed(2)}%</strong>) telah melampaui batas aman standar <strong>2.00%</strong>. Harap segera evaluasi proses timbangan dan fasilitas penyimpanan.
+              Hasil analisis menunjukkan persentase penyusutan daging (Susut Proses: <strong>{totalProcessLossPercent.toFixed(2)}%</strong> | Susut Display: <strong>{totalSusutJualPercent.toFixed(2)}%</strong>) telah melampaui batas aman standar <strong>2.00%</strong>. Harap segera evaluasi proses timbangan dan fasilitas penyimpanan.
             </p>
           </div>
         </div>
@@ -112,7 +112,7 @@ export default function Summary({
             Pemisahan Pengurangan Stok: Sales (Penjualan) vs Susut (Penyusutan Fisik)
           </h4>
           <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">
-            Pengurangan stok akibat <strong>Sales (Penjualan Kasir)</strong> dicatat dalam keterangan tersendiri sebagai <strong>Realisasi Sales</strong> dan <strong>TIDAK dimasukkan ke dalam Susut Daging</strong> (susut thawing, susut pabrikasi, maupun susut display). Hal ini memastikan audit stok fisik & performa keuangan tetap akurat.
+            Pengurangan stok akibat <strong>Sales (Penjualan Kasir)</strong> dicatat dalam keterangan tersendiri sebagai <strong>Realisasi Sales</strong> dan <strong>TIDAK dimasukkan ke dalam Susut Daging</strong> (susut thawing, susut proses potong, maupun susut display). Hal ini memastikan audit stok fisik & performa keuangan tetap akurat.
           </p>
         </div>
       </div>
@@ -211,7 +211,7 @@ export default function Summary({
       <div className="space-y-3">
         <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
           <Layers className="text-emerald-600 w-5 h-5" />
-          Akumulasi Hasil Segmen Pabrikasi (Dipisah Pesanan vs Display)
+          Akumulasi Hasil Potongan Produk (Dipisah Pesanan vs Display)
         </h3>
 
         {(() => {

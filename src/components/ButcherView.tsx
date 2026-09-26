@@ -7,6 +7,7 @@ import {
   Store
 } from '../types';
 import { processHighResImage } from '../utils/imageCompressor';
+import { getHMinus1ClosingStock } from '../utils/dateUtils';
 import {
   Beef,
   Scale,
@@ -265,7 +266,9 @@ export default function ButcherView({
       (s) => (s.plannedFabrication || '').toLowerCase().includes(selectedPlanForClosing.toLowerCase())
     );
 
-    const openingStockKg = carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0);
+    const todayStr = new Date().toISOString().split('T')[0];
+    const h1Closing = getHMinus1ClosingStock(closingRecords || [], { id: currentUser.storeId }, selectedPlanForClosing, todayStr);
+    const openingStockKg = carryoverPlanItems.reduce((sum, i) => sum + i.weightBeforeThawing, 0) || (h1Closing ?? 0);
     const newProcessedKg = todayPlanItems.reduce((sum, i) => sum + (i.weightAfterThawing || i.weightBeforeThawing), 0);
     const salesKg = planSegs.reduce((sum, s) => sum + (s.salesKg || 0), 0);
     const closingBySystem = Math.max(0, openingStockKg + newProcessedKg - salesKg);

@@ -10,6 +10,7 @@ import {
   CogsMaster,
 } from '../types';
 import { exportStoreDailyLaporanExcel } from '../utils/excelExport';
+import { matchStoreEntity, isMatchPlan } from '../utils/storeHelper';
 import {
   Camera,
   Trash2,
@@ -24,6 +25,11 @@ import {
   FileSpreadsheet,
   Weight,
   Scale,
+  CheckCircle2,
+  AlertCircle,
+  Eye,
+  Check,
+  ArrowRight,
 } from 'lucide-react';
 
 interface RiwayatHarianProps {
@@ -36,6 +42,7 @@ interface RiwayatHarianProps {
   currentStore?: Store;
   onCloseDay?: (closedReport: DailyClosingReport) => void;
   onDeleteReport?: (id: string) => void;
+  onNavigateToClosing?: () => void;
 }
 
 export default function RiwayatHarian({
@@ -48,6 +55,7 @@ export default function RiwayatHarian({
   currentStore,
   onCloseDay,
   onDeleteReport,
+  onNavigateToClosing,
 }: RiwayatHarianProps) {
   // Store name display
   const cleanStoreName = currentStore?.name
@@ -337,6 +345,15 @@ export default function RiwayatHarian({
     }
   };
 
+  // Active closing records for active date & store
+  const activeClosingRecords = useMemo(() => {
+    return closingRecords.filter((rec) => {
+      if (!matchStoreEntity(rec.storeId, currentStore)) return false;
+      const recDate = (rec.date || rec.timestamp || '').split('T')[0];
+      return recDate === activeDate || (!rec.date && viewingTodayDraft);
+    });
+  }, [closingRecords, currentStore, activeDate, viewingTodayDraft]);
+
   // Sorted reports descending
   const sortedReports = useMemo(() => {
     return [...reports].sort((a, b) => {
@@ -581,7 +598,7 @@ export default function RiwayatHarian({
             <div className="flex items-center gap-2">
               <div className="px-3.5 py-1.5 rounded-full bg-purple-600 text-white text-xs font-black flex items-center gap-1.5 shadow-xs">
                 <Camera className="w-4 h-4" />
-                <span>Riwayat Foto & Keterangan ({currentPhotos.length})</span>
+                <span>Riwayat Operasional & Foto ({currentPhotos.length})</span>
               </div>
               <span className="text-xs font-bold text-slate-300 hidden md:inline">
                 • {formattedActiveDate}
@@ -589,6 +606,16 @@ export default function RiwayatHarian({
             </div>
 
             <div className="flex items-center gap-2 self-start sm:self-center">
+              {onNavigateToClosing && (
+                <button
+                  type="button"
+                  onClick={onNavigateToClosing}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
+                >
+                  <Scale className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Closing Rencana Potong</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleExportExcelForActiveDate}
@@ -599,6 +626,155 @@ export default function RiwayatHarian({
                 <span>Unduh Laporan Excel</span>
               </button>
             </div>
+          </div>
+
+          {/* Rekap Sisa Stok Closing Fisik yang diinput Butcher */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 sm:p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Rekap Sisa Stok Closing & Susut Jual ({activeClosingRecords.length} Rencana Terinput)</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  Data hasil penimbangan fisik sisa stok butcher pada tanggal {formattedActiveDate}.
+                </p>
+              </div>
+              <span className="text-[10px] font-bold px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg border border-emerald-200 self-start sm:self-auto">
+                Mode Paralel Aktif
+              </span>
+            </div>
+
+            {activeClosingRecords.length === 0 ? (
+              <div className="py-6 px-4 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500 space-y-2">
+                <Scale className="w-6 h-6 mx-auto text-slate-400" />
+                <p className="text-xs font-bold text-slate-700">
+                  Belum ada rencana potong yang di-closing untuk periode ini.
+                </p>
+                <p className="text-[11px] text-slate-400 max-w-md mx-auto">
+                  Butcher dapat langsung menimbang dan menginput closing fisik di tab Closing Rencana Potong tanpa harus menunggu admin input sales.
+                </p>
+                {onNavigateToClosing && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToClosing}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer mt-1"
+                  >
+                    <span>Buka Closing Rencana Potong</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-500 bg-slate-50">
+                        <th className="py-2.5 px-3 rounded-l-xl">Rencana Potong</th>
+                        <th className="py-2.5 px-3 text-right">Stok Awal</th>
+                        <th className="py-2.5 px-3 text-right">Potong Baru</th>
+                        <th className="py-2.5 px-3 text-right">Sales Terjual</th>
+                        <th className="py-2.5 px-3 text-right">Stok Sistem</th>
+                        <th className="py-2.5 px-3 text-right text-emerald-800">Sisa Fisik</th>
+                        <th className="py-2.5 px-3 text-right text-rose-700">Susut Jual</th>
+                        <th className="py-2.5 px-3 text-center rounded-r-xl">Foto & Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {activeClosingRecords.map((rec) => {
+                        const hasSales = (rec.salesKg || 0) > 0;
+                        return (
+                          <tr key={rec.id} className="hover:bg-slate-50/60 transition">
+                            <td className="py-3 px-3">
+                              <span className="font-extrabold text-slate-900 block">{rec.planName}</span>
+                              <span className="text-[10px] text-slate-400 font-semibold">{rec.category || 'DAGING FRESH'}</span>
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-slate-600">
+                              {(rec.openingStockKg || 0).toFixed(2)} Kg
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-slate-600">
+                              {(rec.newProcessedKg || 0).toFixed(2)} Kg
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-blue-700">
+                              {(rec.salesKg || 0).toFixed(2)} Kg
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-slate-700">
+                              {(rec.closingStockBySystemKg || 0).toFixed(2)} Kg
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-black text-emerald-700 bg-emerald-50/50 rounded-lg">
+                              {(rec.actualClosingStockKg ?? 0).toFixed(2)} Kg
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-black text-rose-600">
+                              {(rec.susutJualKg || 0).toFixed(2)} Kg
+                            </td>
+                            <td className="py-3 px-3">
+                              <div className="flex items-center justify-center gap-1.5">
+                                {rec.photoUrl ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewPhoto({
+                                      id: rec.id,
+                                      url: rec.photoUrl!,
+                                      caption: `Foto Closing: ${rec.planName} (${(rec.actualClosingStockKg ?? 0).toFixed(2)} Kg)`,
+                                      category: 'Closing Stock',
+                                      uploadedAt: rec.timestamp,
+                                    })}
+                                    className="p-1 text-purple-700 hover:bg-purple-50 rounded-lg border border-purple-200 transition cursor-pointer"
+                                    title="Lihat Foto Timbangan"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <span className="text-[10px] text-slate-300">-</span>
+                                )}
+                                <span
+                                  className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${
+                                    hasSales
+                                      ? 'bg-blue-100 text-blue-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}
+                                  title={hasSales ? 'Sales sudah tercatat' : 'Menunggu input sales admin'}
+                                >
+                                  {hasSales ? 'Sales OK' : 'Menunggu Sales'}
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-xs">
+                  <div className="p-2.5 bg-slate-50 rounded-xl">
+                    <span className="text-[10px] font-bold text-slate-400 block">Total Potong Baru</span>
+                    <span className="font-extrabold text-slate-800">
+                      {activeClosingRecords.reduce((sum, r) => sum + (r.newProcessedKg || 0), 0).toFixed(2)} Kg
+                    </span>
+                  </div>
+                  <div className="p-2.5 bg-blue-50/60 rounded-xl">
+                    <span className="text-[10px] font-bold text-blue-500 block">Total Sales Terjual</span>
+                    <span className="font-extrabold text-blue-800">
+                      {activeClosingRecords.reduce((sum, r) => sum + (r.salesKg || 0), 0).toFixed(2)} Kg
+                    </span>
+                  </div>
+                  <div className="p-2.5 bg-emerald-50 rounded-xl">
+                    <span className="text-[10px] font-bold text-emerald-600 block">Total Sisa Stok Fisik</span>
+                    <span className="font-black text-emerald-800">
+                      {activeClosingRecords.reduce((sum, r) => sum + (r.actualClosingStockKg || 0), 0).toFixed(2)} Kg
+                    </span>
+                  </div>
+                  <div className="p-2.5 bg-rose-50 rounded-xl">
+                    <span className="text-[10px] font-bold text-rose-500 block">Total Susut Jual</span>
+                    <span className="font-black text-rose-700">
+                      {activeClosingRecords.reduce((sum, r) => sum + (r.susutJualKg || 0), 0).toFixed(2)} Kg
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Photo Gallery Grid */}

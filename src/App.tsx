@@ -8,7 +8,9 @@ import {
   UserAccount,
   CogsMaster,
   StockAdjustment,
-  ClosingPlanRecord
+  ClosingPlanRecord,
+  GrnRecord,
+  ReportCategory,
 } from './types';
 import {
   getStores,
@@ -22,35 +24,34 @@ import {
   normalizeCogsList,
   getStockAdjustments,
   saveStockAdjustments,
+  saveStockAdjustmentsLocally,
   getClosingPlanRecords,
   saveClosingPlanRecords,
+  saveClosingPlanRecordsLocally,
   deleteClosingPlanRecord,
   purgeDateRecords,
   getThawingItems,
   saveThawingItems,
+  saveThawingItemsLocally,
   getFabricationSegments,
   saveFabricationSegments,
+  saveFabricationSegmentsLocally,
   getDailyReports,
   saveDailyReports,
+  saveDailyReportsLocally,
   deleteDailyReport,
   deleteFabricationSegment,
   getLossConfig,
   saveLossConfig,
   resetDatabase,
-  pullAllDataFromGoogleSheets,
-  deleteThawingItemFromCloud,
   deduplicateThawingItems,
   deduplicateDailyReports,
+  getGrnRecords,
+  saveGrnRecords,
+  deleteGrnRecord,
 } from './utils/db';
-import {
-  getGoogleAppsScriptUrl,
-  getLastSyncTime,
-  upsertRecordToSheets,
-  deleteRecordFromSheets,
-  updateTableInSheets,
-  pushAllDataToSheets,
-} from './utils/sheetsApi';
 import { matchStoreEntity, getEffectiveStore, isMatchPlan, getDeterministicClosingRecordId } from './utils/storeHelper';
+import { findHMinus1ClosingRecord, propagateClosingToNextDay, getNextDateStr } from './utils/dateUtils';
 
 // Auth Screen
 import LoginScreen from './components/LoginScreen';
@@ -69,7 +70,7 @@ import ButcherClosingView from './components/ButcherClosingView';
 // Modals
 import TransferPurposeModal from './components/TransferPurposeModal';
 import EditRencanaPotongModal from './components/EditRencanaPotongModal';
-import GoogleSheetsSetupModal from './components/GoogleSheetsSetupModal';
+import AppsScriptDatabaseModal from './components/AppsScriptDatabaseModal';
 
 // Icons
 import {
@@ -121,14 +122,17 @@ export default function App() {
 
   // Account & Store State
   const [stores, setStores] = useState<Store[]>([]);
-  const [selectedStoreIdForMd, setSelectedStoreIdForMd] = useState<string>('store_ckt');
+  const [selectedStoreIdForMd, setSelectedStoreIdForMd] = useState<string>('all');
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [showAccountModal, setShowAccountModal] = useState<boolean>(false);
+  const [showAppsScriptModal, setShowAppsScriptModal] = useState<boolean>(false);
 
   // Operational Database State
   const [cogsList, setCogsList] = useState<CogsMaster[]>([]);
   const [adjustments, setAdjustments] = useState<StockAdjustment[]>([]);
   const [closingRecords, setClosingRecords] = useState<ClosingPlanRecord[]>([]);
+  const [grnRecords, setGrnRecords] = useState<GrnRecord[]>([]);
+  const [activeReportCategory, setActiveReportCategory] = useState<ReportCategory>('DAGING');
   const [items, setItems] = useState<ThawingItem[]>([]);
   const [segments, setSegments] = useState<FabricationSegment[]>([]);
   const [reports, setReports] = useState<DailyClosingReport[]>([]);
@@ -141,11 +145,9 @@ export default function App() {
     salesPredictionKg: 40.0,
   });
 
-  // Google Sheets Cloud Sync & Multi-Device State
-  const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
-  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
-  const [lastCloudSync, setLastCloudSync] = useState<string | null>(getLastSyncTime());
-  const [cloudConnected, setCloudConnected] = useState<boolean>(Boolean(getGoogleAppsScriptUrl()));
+  // System State
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [backendConnected, setBackendConnected] = useState<boolean>(true);
 
   // Modal states
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -162,116 +164,12 @@ export default function App() {
   const [newAdminPassword, setNewAdminPassword] = useState('admin123');
   const [addStoreSuccess, setAddStoreSuccess] = useState(false);
 
-  // Initial Load from Integrated Database, Google Sheets, or local cache
+  // Initial Load from System API or local cache
   const fetchAllData = async (silent = false) => {
-    if (!silent) setIsCloudSyncing(true);
+    if (!silent) setIsRefreshing(true);
     try {
-      const hasSheetsUrl = Boolean(getGoogleAppsScriptUrl());
-      setCloudConnected(hasSheetsUrl);
-
-      // 1. If Google Apps Script is configured, prioritize pulling directly from Google Spreadsheet
-      if (hasSheetsUrl) {
-        const sheetsRes = await pullAllDataFromGoogleSheets();
-        if (sheetsRes.success && sheetsRes.data) {
-          const d = sheetsRes.data;
-          if (d.stores && d.stores.length > 0) {
-            setStores(d.stores);
-            setSelectedStoreIdForMd((prev) => {
-              if (d.stores && d.stores.some((s) => s.id === prev || matchStoreEntity(prev, s))) return prev;
-              return d.stores ? d.stores[0].id : prev;
-            });
-          }
-          if (d.users && d.users.length > 0) setUsers(d.users);
-          if (d.cogsMaster && d.cogsMaster.length > 0) setCogsList(normalizeCogsList(d.cogsMaster));
-          if (d.thawingItems) setItems(deduplicateThawingItems((d.thawingItems || []).filter((i: any) => (i.createdAt || i.thawingStartTime || '').split('T')[0] !== '2026-08-29')));
-          if (d.fabricationSegments) setSegments((d.fabricationSegments || []).filter((s: any) => (s.createdAt || s.transferTimestamp || '').split('T')[0] !== '2026-08-29'));
-          if (d.closingPlanRecords) {
-            const rawRecords = Array.isArray(d.closingPlanRecords) ? d.closingPlanRecords : [];
-            const sanitized: ClosingPlanRecord[] = rawRecords
-              .filter((r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29')
-              .map((r: any) => ({
-                ...r,
-                openingStockKg: Number(r.openingStockKg) || 0,
-                newProcessedKg: Number(r.newProcessedKg) || 0,
-                adjustInKg: Number(r.adjustInKg) || 0,
-                adjustOutKg: Number(r.adjustOutKg) || 0,
-                salesKg: Number(r.salesKg) || 0,
-                closingStockBySystemKg: Number(r.closingStockBySystemKg) || 0,
-                actualClosingStockKg: Number(r.actualClosingStockKg) || 0,
-                susutJualKg: Number(r.susutJualKg) || 0,
-              }));
-
-            // Merge with local records if local has newer closed timestamp or non-zero weight
-            const local = getClosingPlanRecords();
-            const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
-              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-            );
-
-            // Robust merge: sheets/cloud base with local updates taking precedence
-            const recordMap = new Map<string, ClosingPlanRecord>();
-            sanitized.forEach((srv) => {
-              const key = srv.id || `${srv.storeId}_${srv.planName}_${srv.date || ''}`;
-              recordMap.set(key, srv);
-            });
-
-            localList.forEach((loc) => {
-              let foundKey: string | undefined = undefined;
-              if (loc.id && recordMap.has(loc.id)) {
-                foundKey = loc.id;
-              } else {
-                for (const [k, s] of recordMap.entries()) {
-                  if (
-                    matchStoreEntity(s.storeId, { id: loc.storeId }) &&
-                    isMatchPlan(s.planName, loc.planName) &&
-                    (s.date === loc.date || (!s.date && !loc.date))
-                  ) {
-                    foundKey = k;
-                    break;
-                  }
-                }
-              }
-
-              if (!foundKey) {
-                const newKey = loc.id || `${loc.storeId}_${loc.planName}_${loc.date || ''}`;
-                recordMap.set(newKey, loc);
-              } else {
-                const existing = recordMap.get(foundKey)!;
-                const locTime = new Date(loc.timestamp || 0).getTime();
-                const srvTime = new Date(existing.timestamp || 0).getTime();
-                const locActual = Number(loc.actualClosingStockKg || 0);
-                const srvActual = Number(existing.actualClosingStockKg || 0);
-
-                if (locTime >= srvTime || (locActual > 0 && srvActual === 0) || (loc.photoUrl && !existing.photoUrl)) {
-                  recordMap.set(foundKey, { ...existing, ...loc });
-                } else {
-                  recordMap.set(foundKey, {
-                    ...loc,
-                    ...existing,
-                    photoUrl: existing.photoUrl || loc.photoUrl || '',
-                    note: existing.note || loc.note || '',
-                  });
-                }
-              }
-            });
-
-            const filteredMerged = Array.from(recordMap.values()).filter(
-              (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-            );
-            setClosingRecords(filteredMerged);
-            if (filteredMerged.length > 0) {
-              saveClosingPlanRecords(filteredMerged);
-            }
-          }
-          if (d.dailyClosingReports) setReports(deduplicateDailyReports((d.dailyClosingReports || []).filter((r: any) => (r.date || '').split('T')[0] !== '2026-08-29')));
-          if (d.stockAdjustments) setAdjustments((d.stockAdjustments || []).filter((a: any) => (a.date || a.createdAt || '').split('T')[0] !== '2026-08-29'));
-          if (d.lossConfig) setLossConfig(d.lossConfig);
-          setLastCloudSync(new Date().toISOString());
-          return;
-        }
-      }
-
-      // 2. Fallback: Fetch from backend API / local cache
-      const [resStores, resUsers, resCogs, resItems, resSegs, resAdjs, resRecords, resReps] = await Promise.all([
+      // Fetch from backend API / local cache
+      const [resStores, resUsers, resCogs, resItems, resSegs, resAdjs, resRecords, resReps, resGrn] = await Promise.all([
         fetch('/api/stores').catch(() => null),
         fetch('/api/users').catch(() => null),
         fetch('/api/cogs').catch(() => null),
@@ -280,7 +178,11 @@ export default function App() {
         fetch('/api/adjustments').catch(() => null),
         fetch('/api/closing-records').catch(() => null),
         fetch('/api/reports').catch(() => null),
+        fetch('/api/grn').catch(() => null),
       ]);
+
+      const isBackendLive = Boolean(resStores?.ok || resItems?.ok || resUsers?.ok);
+      setBackendConnected(isBackendLive);
 
       if (resStores && resStores.ok) {
         const data = await resStores.json();
@@ -323,21 +225,65 @@ export default function App() {
 
       if (resItems && resItems.ok) {
         const data = await resItems.json();
-        if (Array.isArray(data)) setItems(deduplicateThawingItems(data));
+        const serverList: ThawingItem[] = Array.isArray(data) ? data : [];
+        const localList: ThawingItem[] = getThawingItems();
+        const itemMap = new Map<string, ThawingItem>();
+        serverList.forEach((it) => { if (it && it.id) itemMap.set(it.id, it); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!itemMap.has(loc.id)) {
+            itemMap.set(loc.id, loc);
+          } else {
+            const srv = itemMap.get(loc.id)!;
+            const lTime = new Date(loc.createdAt || loc.thawingStartTime || 0).getTime();
+            const sTime = new Date(srv.createdAt || srv.thawingStartTime || 0).getTime();
+            if (lTime >= sTime || (loc.status === 'pabrikasi_done' && srv.status !== 'pabrikasi_done')) {
+              itemMap.set(loc.id, { ...srv, ...loc });
+            }
+          }
+        });
+        const merged = deduplicateThawingItems(Array.from(itemMap.values()));
+        setItems(merged);
+        saveThawingItemsLocally(merged);
       } else {
         setItems(deduplicateThawingItems(getThawingItems()));
       }
 
       if (resSegs && resSegs.ok) {
         const data = await resSegs.json();
-        if (Array.isArray(data)) setSegments(data);
+        const serverList: FabricationSegment[] = Array.isArray(data) ? data : [];
+        const localList: FabricationSegment[] = getFabricationSegments();
+        const segMap = new Map<string, FabricationSegment>();
+        serverList.forEach((s) => { if (s && s.id) segMap.set(s.id, s); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!segMap.has(loc.id)) {
+            segMap.set(loc.id, loc);
+          } else {
+            const srv = segMap.get(loc.id)!;
+            segMap.set(loc.id, { ...srv, ...loc });
+          }
+        });
+        const merged = Array.from(segMap.values());
+        setSegments(merged);
+        saveFabricationSegmentsLocally(merged);
       } else {
         setSegments(getFabricationSegments());
       }
 
       if (resAdjs && resAdjs.ok) {
         const data = await resAdjs.json();
-        if (Array.isArray(data)) setAdjustments(data);
+        const serverList: StockAdjustment[] = Array.isArray(data) ? data : [];
+        const localList: StockAdjustment[] = getStockAdjustments();
+        const adjMap = new Map<string, StockAdjustment>();
+        serverList.forEach((a) => { if (a && a.id) adjMap.set(a.id, a); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!adjMap.has(loc.id)) adjMap.set(loc.id, loc);
+        });
+        const merged = Array.from(adjMap.values());
+        setAdjustments(merged);
+        saveStockAdjustmentsLocally(merged);
       } else {
         setAdjustments(getStockAdjustments());
       }
@@ -345,66 +291,43 @@ export default function App() {
       if (resRecords && resRecords.ok) {
         const data = await resRecords.json();
         const local = getClosingPlanRecords();
-        const serverList: ClosingPlanRecord[] = (Array.isArray(data) ? data : []).filter(
-          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
-        const localList: ClosingPlanRecord[] = (Array.isArray(local) ? local : []).filter(
-          (r: any) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
+        const serverList: ClosingPlanRecord[] = Array.isArray(data) ? data : [];
+        const localList: ClosingPlanRecord[] = Array.isArray(local) ? local : [];
 
-        // Robust merge: server base with local updates taking priority
+        // Robust merge: server base with local updates taking priority, strictly matched by unique ID
         const recordMap = new Map<string, ClosingPlanRecord>();
         serverList.forEach((srv) => {
-          const key = srv.id || `${srv.storeId}_${srv.planName}_${srv.date || ''}`;
-          recordMap.set(key, srv);
+          if (srv && srv.id) recordMap.set(srv.id, srv);
         });
 
         localList.forEach((loc) => {
-          let foundKey: string | undefined = undefined;
-          if (loc.id && recordMap.has(loc.id)) {
-            foundKey = loc.id;
-          } else {
-            for (const [k, s] of recordMap.entries()) {
-              if (
-                matchStoreEntity(s.storeId, { id: loc.storeId }) &&
-                isMatchPlan(s.planName, loc.planName) &&
-                (s.date === loc.date || (!s.date && !loc.date))
-              ) {
-                foundKey = k;
-                break;
-              }
-            }
-          }
-
-          if (!foundKey) {
-            const newKey = loc.id || `${loc.storeId}_${loc.planName}_${loc.date || ''}`;
-            recordMap.set(newKey, loc);
-          } else {
-            const existing = recordMap.get(foundKey)!;
+          if (!loc || !loc.id) return;
+          if (recordMap.has(loc.id)) {
+            const existing = recordMap.get(loc.id)!;
             const locTime = new Date(loc.timestamp || 0).getTime();
             const srvTime = new Date(existing.timestamp || 0).getTime();
             const locActual = Number(loc.actualClosingStockKg || 0);
             const srvActual = Number(existing.actualClosingStockKg || 0);
 
             if (locTime >= srvTime || (locActual > 0 && srvActual === 0) || (loc.photoUrl && !existing.photoUrl)) {
-              recordMap.set(foundKey, { ...existing, ...loc });
+              recordMap.set(loc.id, { ...existing, ...loc });
             } else {
-              recordMap.set(foundKey, {
+              recordMap.set(loc.id, {
                 ...loc,
                 ...existing,
                 photoUrl: existing.photoUrl || loc.photoUrl || '',
                 note: existing.note || loc.note || '',
               });
             }
+          } else {
+            recordMap.set(loc.id, loc);
           }
         });
 
-        const filtered = Array.from(recordMap.values()).filter(
-          (r) => (r.date || r.timestamp || '').split('T')[0] !== '2026-08-29'
-        );
+        const filtered = Array.from(recordMap.values());
         setClosingRecords(filtered);
         if (filtered.length > 0) {
-          saveClosingPlanRecords(filtered);
+          saveClosingPlanRecordsLocally(filtered);
         }
       } else {
         setClosingRecords(getClosingPlanRecords());
@@ -412,9 +335,36 @@ export default function App() {
 
       if (resReps && resReps.ok) {
         const data = await resReps.json();
-        if (Array.isArray(data)) setReports(deduplicateDailyReports(data));
+        const serverList: DailyClosingReport[] = Array.isArray(data) ? data : [];
+        const localList: DailyClosingReport[] = getDailyReports();
+        const repMap = new Map<string, DailyClosingReport>();
+        serverList.forEach((r) => { if (r && r.id) repMap.set(r.id, r); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!repMap.has(loc.id)) repMap.set(loc.id, loc);
+        });
+        const merged = deduplicateDailyReports(Array.from(repMap.values()));
+        setReports(merged);
+        saveDailyReportsLocally(merged);
       } else {
         setReports(deduplicateDailyReports(getDailyReports()));
+      }
+
+      if (resGrn && resGrn.ok) {
+        const data = await resGrn.json();
+        const serverList: GrnRecord[] = Array.isArray(data) ? data : [];
+        const localList: GrnRecord[] = getGrnRecords();
+        const grnMap = new Map<string, GrnRecord>();
+        serverList.forEach((g) => { if (g && g.id) grnMap.set(g.id, g); });
+        localList.forEach((loc) => {
+          if (!loc || !loc.id) return;
+          if (!grnMap.has(loc.id)) grnMap.set(loc.id, loc);
+        });
+        const merged = Array.from(grnMap.values());
+        setGrnRecords(merged);
+        localStorage.setItem('grn_records', JSON.stringify(merged));
+      } else {
+        setGrnRecords(getGrnRecords());
       }
 
       setLossConfig(getLossConfig());
@@ -425,12 +375,13 @@ export default function App() {
       setCogsList(getCogsMaster());
       setAdjustments(getStockAdjustments());
       setClosingRecords(getClosingPlanRecords());
+      setGrnRecords(getGrnRecords());
       setItems(deduplicateThawingItems(getThawingItems()));
       setSegments(getFabricationSegments());
       setReports(deduplicateDailyReports(getDailyReports()));
       setLossConfig(getLossConfig());
     } finally {
-      setIsCloudSyncing(false);
+      setIsRefreshing(false);
       setIsInitializing(false);
     }
   };
@@ -461,19 +412,22 @@ export default function App() {
     // 2. Fetch initial data on mount (without touching activeTab)
     fetchAllData(true);
 
-    // 3. Periodic gentle background polling (every 12s if tab is visible) to auto-sync closing and sales across roles
+    // 3. Periodic background polling (every 3s if tab is visible) to auto-sync data across Butcher, Admin, and MD in realtime
     const pollInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchAllData(true);
       }
-    }, 12000);
+    }, 3000);
 
-    // 4. Gentle sync on tab return / window focus (NEVER resets activeTab)
+    // 4. Instant sync on tab return / window focus
     const handleFocus = () => {
-      fetchAllData(true);
+      if (document.visibilityState === 'visible') {
+        fetchAllData(true);
+      }
     };
 
     window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
 
     // 5. Cross-tab instant communication via BroadcastChannel
     let bc: BroadcastChannel | null = null;
@@ -481,16 +435,11 @@ export default function App() {
       try {
         bc = new BroadcastChannel('tdn_meat_tracker_channel');
         bc.onmessage = (event) => {
-          if (event.data?.type === 'CLOSING_RECORD_SAVED' && event.data.record) {
-            const incoming: ClosingPlanRecord = event.data.record;
+          const { type, record, item, segments: inSegs, adjustment, report } = event.data || {};
+          if (type === 'CLOSING_RECORD_SAVED' && record) {
+            const incoming: ClosingPlanRecord = record;
             setClosingRecords((prev) => {
-              const existingIdx = prev.findIndex(
-                (r) =>
-                  r.id === incoming.id ||
-                  (matchStoreEntity(r.storeId, { id: incoming.storeId }) &&
-                    isMatchPlan(r.planName, incoming.planName) &&
-                    (r.date === incoming.date || !r.date || !incoming.date))
-              );
+              const existingIdx = prev.findIndex((r) => Boolean(incoming.id && r.id && r.id === incoming.id));
               if (existingIdx >= 0) {
                 const next = [...prev];
                 next[existingIdx] = incoming;
@@ -498,6 +447,49 @@ export default function App() {
               }
               return [incoming, ...prev];
             });
+          } else if (type === 'THAWING_ITEM_SAVED' && item) {
+            setItems((prev) => {
+              const existingIdx = prev.findIndex((i) => i.id === item.id);
+              if (existingIdx >= 0) {
+                const next = [...prev];
+                next[existingIdx] = { ...next[existingIdx], ...item };
+                return next;
+              }
+              return [item, ...prev];
+            });
+          } else if (type === 'FABRICATION_SEGMENTS_SAVED') {
+            if (Array.isArray(inSegs)) {
+              setSegments((prev) => {
+                const map = new Map(prev.map((s) => [s.id, s]));
+                inSegs.forEach((s) => map.set(s.id, s));
+                return Array.from(map.values());
+              });
+            }
+            if (item) {
+              setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...item } : i)));
+            }
+          } else if (type === 'ADJUSTMENT_SAVED' && adjustment) {
+            setAdjustments((prev) => {
+              const idx = prev.findIndex((a) => a.id === adjustment.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = adjustment;
+                return next;
+              }
+              return [adjustment, ...prev];
+            });
+          } else if (type === 'REPORT_SAVED' && report) {
+            setReports((prev) => {
+              const idx = prev.findIndex((r) => r.id === report.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = report;
+                return next;
+              }
+              return [report, ...prev];
+            });
+          } else if (type === 'DATA_REFRESH_REQUESTED') {
+            fetchAllData(true);
           }
         };
       } catch (e) {
@@ -508,6 +500,7 @@ export default function App() {
     return () => {
       clearInterval(pollInterval);
       window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
       if (bc) {
         try {
           bc.close();
@@ -524,6 +517,7 @@ export default function App() {
     const userObj = { ...user, role: roleNorm };
     setCurrentUserState(userObj);
     setCurrentUser(userObj);
+    fetchAllData(true);
     if (roleNorm === 'md') {
       setActiveTab('md');
     } else if (roleNorm === 'admin') {
@@ -551,16 +545,27 @@ export default function App() {
       status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
       thawingStartTime?: string;
       storeId?: string;
+      storeName?: string;
     }
   ) => {
     const now = new Date();
-    const effectiveStoreId = newItem.storeId || currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const resolvedStoreId =
+      newItem.storeId ||
+      (currentStore && currentStore.id !== 'all' ? currentStore.id : undefined) ||
+      currentUser?.storeId ||
+      '1';
+    const resolvedStoreName =
+      newItem.storeName ||
+      (currentStore && currentStore.id !== 'all' ? currentStore.name : undefined) ||
+      currentUser?.storeName ||
+      'TDN CKR';
     const createdAtTime = newItem.createdAt || now.toISOString();
     const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const item: ThawingItem = {
       ...newItem,
       id: itemId,
-      storeId: effectiveStoreId,
+      storeId: resolvedStoreId,
+      storeName: resolvedStoreName,
       status: newItem.status || 'thawing',
       thawingStartTime: newItem.thawingStartTime || createdAtTime,
       createdAt: createdAtTime,
@@ -579,6 +584,16 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     }).catch(console.error);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const chan = new BroadcastChannel('tdn_meat_tracker_channel');
+        chan.postMessage({ type: 'THAWING_ITEM_SAVED', item });
+        chan.close();
+      } catch {
+        // ignore
+      }
+    }
   };
 
   // Handler: Batch Add Items (guarantees multiple items are added without closure overwrite)
@@ -588,17 +603,26 @@ export default function App() {
     status?: 'thawing' | 'pabrikasi_ready' | 'pabrikasi_done';
     thawingStartTime?: string;
     storeId?: string;
+    storeName?: string;
   }>) => {
     if (!newItemsList || newItemsList.length === 0) return;
     const now = new Date();
-    const effectiveStoreId = currentStore?.id || currentUser?.storeId || 'store_ckr';
+    const resolvedStoreId =
+      (currentStore && currentStore.id !== 'all' ? currentStore.id : undefined) ||
+      currentUser?.storeId ||
+      '1';
+    const resolvedStoreName =
+      (currentStore && currentStore.id !== 'all' ? currentStore.name : undefined) ||
+      currentUser?.storeName ||
+      'TDN CKR';
     const preparedItems: ThawingItem[] = newItemsList.map((newItem, idx) => {
       const createdAtTime = newItem.createdAt || now.toISOString();
       const itemId = newItem.id && newItem.id.trim() ? newItem.id.trim() : `meat_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
       return {
         ...newItem,
         id: itemId,
-        storeId: newItem.storeId || effectiveStoreId,
+        storeId: newItem.storeId || resolvedStoreId,
+        storeName: newItem.storeName || resolvedStoreName,
         status: newItem.status || 'thawing',
         thawingStartTime: newItem.thawingStartTime || createdAtTime,
         createdAt: createdAtTime,
@@ -628,7 +652,6 @@ export default function App() {
     setItems(updated);
     saveThawingItems(updated);
 
-    upsertRecordToSheets('thawing_items', updatedItem);
     fetch('/api/thawing-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -644,15 +667,12 @@ export default function App() {
     saveThawingItems(updated);
 
     ids.forEach((id) => {
-      deleteRecordFromSheets('thawing_items', id);
-      deleteThawingItemFromCloud(id);
       fetch(`/api/thawing-items/${id}`, { method: 'DELETE' }).catch(() => {});
     });
   };
 
   // Handler: Confirm Thawing Finish (MANDATORY Photo)
   const handleStartFabrication = (id: string, weightAfter: number, photoImage?: string) => {
-    let targetUpdatedObj: ThawingItem | null = null;
     const updated = items.map((item) => {
       if (item.id === id) {
         const lossKg = Math.max(0, item.weightBeforeThawing - weightAfter);
@@ -666,7 +686,6 @@ export default function App() {
           shrinkageThawingPercent: lossPct,
           image: photoImage || item.image || '',
         };
-        targetUpdatedObj = updatedObj;
         fetch('/api/thawing-items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -678,9 +697,6 @@ export default function App() {
     });
     setItems(updated);
     saveThawingItems(updated);
-    if (targetUpdatedObj) {
-      upsertRecordToSheets('thawing_items', targetUpdatedObj);
-    }
   };
 
   // Handler: Save Segments from SegmentasiPabrikasi
@@ -705,7 +721,7 @@ export default function App() {
       salesKg: 0,
       plannedFabrication: planName,
       openingPurpose: purpose,
-      storeId: currentUser?.storeId || 'store_ckr',
+      storeId: parentItem?.storeId || currentStore?.id || currentUser?.storeId || '1',
       createdAt: new Date().toISOString(),
     }));
 
@@ -713,8 +729,6 @@ export default function App() {
     setSegments(updatedSegments);
     saveFabricationSegments(updatedSegments);
 
-    // Sync to SQL & Sheets
-    createdSegments.forEach((seg) => upsertRecordToSheets('fabrication_segments', seg));
     fetch('/api/fabrication-segments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -735,8 +749,15 @@ export default function App() {
     setItems(updatedItems);
     saveThawingItems(updatedItems);
     const updatedParent = updatedItems.find((i) => i.id === itemId);
-    if (updatedParent) {
-      upsertRecordToSheets('thawing_items', updatedParent);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const chan = new BroadcastChannel('tdn_meat_tracker_channel');
+        chan.postMessage({ type: 'FABRICATION_SEGMENTS_SAVED', segments: createdSegments, item: updatedParent });
+        chan.close();
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -787,7 +808,6 @@ export default function App() {
 
     setSegments(updatedSegments);
     saveFabricationSegments(updatedSegments);
-    updateTableInSheets('fabrication_segments', updatedSegments);
 
     fetch('/api/fabrication-segments', {
       method: 'POST',
@@ -809,7 +829,6 @@ export default function App() {
     });
     setItems(updatedItems);
     saveThawingItems(updatedItems);
-    updateTableInSheets('thawing_items', updatedItems);
 
     let foundMatchingRecord = false;
     let updatedClosingRecords = closingRecords.map((rec) => {
@@ -867,7 +886,6 @@ export default function App() {
 
     setClosingRecords(updatedClosingRecords);
     saveClosingPlanRecords(updatedClosingRecords);
-    updateTableInSheets('closing_plan_records', updatedClosingRecords);
 
     fetch('/api/closing-records', {
       method: 'POST',
@@ -1010,19 +1028,16 @@ export default function App() {
     const newItems = [...otherStoreItems, ...carryoverItems];
     setItems(newItems);
     saveThawingItems(newItems);
-    updateTableInSheets('thawing_items', newItems);
 
     // 3. Clear today's segments for this store, keep other stores
     const otherStoreSegments = segments.filter((s) => !matchStoreEntity(s.storeId, currentStore));
     setSegments(otherStoreSegments);
     saveFabricationSegments(otherStoreSegments);
-    updateTableInSheets('fabrication_segments', otherStoreSegments);
 
     // 4. Reset today's active closing records for this store to allow fresh closing tomorrow
     const otherStoreClosings = closingRecords.filter((r) => !matchStoreEntity(r.storeId, currentStore));
     setClosingRecords(otherStoreClosings);
     saveClosingPlanRecords(otherStoreClosings);
-    updateTableInSheets('closing_plan_records', otherStoreClosings);
 
     // 5. Sync to backend API
     fetch('/api/thawing-items', {
@@ -1061,7 +1076,6 @@ export default function App() {
     setReports(updated);
     saveDailyReports(updated);
 
-    upsertRecordToSheets('daily_closing_reports', report);
     fetch('/api/reports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1073,20 +1087,47 @@ export default function App() {
   const handleSaveClosingRecord = (record: Omit<ClosingPlanRecord, 'id' | 'timestamp'> & { id?: string; timestamp?: string }) => {
     const cleanDate = (record.date || '').split('T')[0] || new Date().toISOString().split('T')[0];
     const recId = record.id || getDeterministicClosingRecordId(record.storeId, record.planName, cleanDate);
+
+    // Business Logic: Data H-1 hari inilah yang baru terhitung menjadi sisa kemarin / stock awal tanggal ini
+    let finalOpeningKg = typeof record.openingStockKg === 'number' ? record.openingStockKg : 0;
+    if (finalOpeningKg === 0) {
+      const h1Rec = findHMinus1ClosingRecord(closingRecords, { id: record.storeId }, record.planName, cleanDate);
+      if (h1Rec && typeof h1Rec.actualClosingStockKg === 'number') {
+        finalOpeningKg = h1Rec.actualClosingStockKg;
+      }
+    }
+
+    const effectiveGrnOrProc = (typeof record.grnKg === 'number' ? record.grnKg : (record.newProcessedKg || 0));
+    const totalTersedia = finalOpeningKg + effectiveGrnOrProc + (record.adjustInKg || 0) - (record.adjustOutKg || 0);
+    const closingBySystem = Math.max(0, totalTersedia - (record.salesKg || 0));
+
+    let actualClosing = record.actualClosingStockKg;
+    let susutJual = 0;
+
+    if (record.isUnopened) {
+      actualClosing = closingBySystem;
+      susutJual = 0;
+    } else if (typeof actualClosing === 'number') {
+      susutJual = Math.max(0, closingBySystem - actualClosing);
+    } else {
+      susutJual = record.susutJualKg || 0;
+    }
+
     const newRec: ClosingPlanRecord = {
       ...record,
       id: recId,
       date: cleanDate,
+      openingStockKg: parseFloat(finalOpeningKg.toFixed(3)),
+      closingStockBySystemKg: parseFloat(closingBySystem.toFixed(3)),
+      actualClosingStockKg: typeof actualClosing === 'number' ? parseFloat(actualClosing.toFixed(3)) : undefined,
+      susutJualKg: parseFloat(susutJual.toFixed(3)),
       timestamp: record.timestamp || (cleanDate ? `${cleanDate}T17:00:00.000Z` : new Date().toISOString()),
     };
     
     setClosingRecords((prev) => {
+      // Strictly match by ID to ensure separate entries with the same product name and same amount are preserved
       const existingIdx = prev.findIndex(
-        (r) =>
-          r.id === newRec.id ||
-          (matchStoreEntity(r.storeId, { id: newRec.storeId }) &&
-            isMatchPlan(r.planName, newRec.planName) &&
-            ((r.date || '').split('T')[0] === cleanDate))
+        (r) => Boolean(newRec.id && r.id && r.id === newRec.id)
       );
       let updated: ClosingPlanRecord[];
       if (existingIdx >= 0) {
@@ -1095,11 +1136,13 @@ export default function App() {
       } else {
         updated = [newRec, ...prev];
       }
+
+      // Propagate: Data closing hari ini langsung menjadi sisa kemarin (stok awal) untuk H+1 (hari esok) jika record H+1 sudah ada
+      updated = propagateClosingToNextDay(newRec, updated);
+
       saveClosingPlanRecords(updated, newRec);
       return updated;
     });
-
-    upsertRecordToSheets('closing_plan_records', newRec);
 
     // Cross-tab broadcast for instant multi-device/multi-window synchronization
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -1112,10 +1155,36 @@ export default function App() {
       }
     }
 
-    // Trigger subtle cloud refresh to verify cloud alignment
+    // Trigger subtle refresh to verify alignment
     setTimeout(() => {
       fetchAllData(true);
     }, 2000);
+  };
+
+  // Handler: Save GRN (Goods Received Note for Sosis, Kentang, Fillet Dori & Parting Ayam)
+  const handleSaveGrn = (records: GrnRecord[] | GrnRecord) => {
+    const incoming = Array.isArray(records) ? records : [records];
+    setGrnRecords((prev) => {
+      const updated = [...prev];
+      incoming.forEach((rec) => {
+        // Strictly match by unique ID to allow multiple shipments with same product name and amount
+        const idx = updated.findIndex((r) => Boolean(rec.id && r.id && r.id === rec.id));
+        if (idx >= 0) {
+          updated[idx] = { ...updated[idx], ...rec };
+        } else {
+          updated.unshift(rec);
+        }
+      });
+      return updated;
+    });
+    saveGrnRecords(incoming);
+  };
+
+  // Handler: Batch Update Sales List
+  const handleUpdateSalesList = (salesList: { planName: string; salesKg: number }[]) => {
+    salesList.forEach((item) => {
+      handleUpdateSales(item.planName, item.salesKg);
+    });
   };
 
   // Handler: Transfer Purpose (Pesanan <-> Display)
@@ -1159,7 +1228,6 @@ export default function App() {
         const updatedSegments = segments.map((s) => (s.id === id ? updatedSource : s)).concat(newTransferSegment);
         setSegments(updatedSegments);
         saveFabricationSegments(updatedSegments);
-        updateTableInSheets('fabrication_segments', updatedSegments);
       } else {
         const updatedSegments = segments.map((s) => {
           if (s.id === id) {
@@ -1175,7 +1243,6 @@ export default function App() {
         });
         setSegments(updatedSegments);
         saveFabricationSegments(updatedSegments);
-        updateTableInSheets('fabrication_segments', updatedSegments);
       }
     } else {
       const sourceItem = items.find((i) => i.id === id);
@@ -1208,7 +1275,6 @@ export default function App() {
         const updatedItems = items.map((i) => (i.id === id ? updatedSourceItem : i)).concat(newTransferItem);
         setItems(updatedItems);
         saveThawingItems(updatedItems);
-        updateTableInSheets('thawing_items', updatedItems);
       } else {
         const updatedItems = items.map((i) => {
           if (i.id === id) {
@@ -1224,7 +1290,6 @@ export default function App() {
         });
         setItems(updatedItems);
         saveThawingItems(updatedItems);
-        updateTableInSheets('thawing_items', updatedItems);
       }
     }
   };
@@ -1242,7 +1307,6 @@ export default function App() {
     });
     setItems(updatedItems);
     saveThawingItems(updatedItems);
-    updateTableInSheets('thawing_items', updatedItems);
 
     if (updateSegmentNames) {
       const updatedSegments = segments.map((seg) => {
@@ -1256,7 +1320,6 @@ export default function App() {
       });
       setSegments(updatedSegments);
       saveFabricationSegments(updatedSegments);
-      updateTableInSheets('fabrication_segments', updatedSegments);
     }
   };
 
@@ -1271,7 +1334,6 @@ export default function App() {
     setAdjustments(updated);
     saveStockAdjustments(updated);
 
-    upsertRecordToSheets('stock_adjustments', newAdj);
     fetch('/api/adjustments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1284,12 +1346,38 @@ export default function App() {
     setAdjustments(updated);
     saveStockAdjustments(updated);
 
-    deleteRecordFromSheets('stock_adjustments', id);
     fetch(`/api/adjustments/${id}`, { method: 'DELETE' }).catch(console.error);
   };
 
   const handleDeleteClosingRecord = (id: string) => {
-    const updated = closingRecords.filter((r) => r.id !== id);
+    const deletedRec = closingRecords.find((r) => r.id === id);
+    let updated = closingRecords.filter((r) => r.id !== id);
+
+    if (deletedRec) {
+      const cleanDate = (deletedRec.date || deletedRec.timestamp || '').split('T')[0];
+      const nextDate = getNextDateStr(cleanDate);
+      // Jika H-1 dihapus, maka sisa kemarin untuk H+1 kembali menjadi 0 (terisolasi harian)
+      updated = updated.map((r) => {
+        const rDate = (r.date || r.timestamp || '').split('T')[0];
+        if (
+          rDate === nextDate &&
+          matchStoreEntity(r.storeId, { id: deletedRec.storeId }) &&
+          isMatchPlan(r.planName, deletedRec.planName)
+        ) {
+          const totalTersedia = (r.newProcessedKg || 0) + (r.adjustInKg || 0) - (r.adjustOutKg || 0);
+          const closingStockBySystemKg = Math.max(0, totalTersedia - (r.salesKg || 0));
+          const susutJualKg = Math.max(0, closingStockBySystemKg - (r.actualClosingStockKg || 0));
+          return {
+            ...r,
+            openingStockKg: 0,
+            closingStockBySystemKg: parseFloat(closingStockBySystemKg.toFixed(3)),
+            susutJualKg: parseFloat(susutJualKg.toFixed(3)),
+          };
+        }
+        return r;
+      });
+    }
+
     setClosingRecords(updated);
     saveClosingPlanRecords(updated);
     deleteClosingPlanRecord(id);
@@ -1358,10 +1446,7 @@ export default function App() {
     saveStores(updatedStores);
     saveUsers(updatedUsers);
 
-    updateTableInSheets('stores', updatedStores);
-    updateTableInSheets('users', updatedUsers);
-
-    // Save to SQL
+    // Save to System Backend
     try {
       await fetch('/api/stores', {
         method: 'POST',
@@ -1390,7 +1475,6 @@ export default function App() {
     }
     setCogsList(updatedCogs);
     saveCogsMaster(updatedCogs);
-    updateTableInSheets('cogs_master', updatedCogs);
 
     fetch('/api/cogs', {
       method: 'POST',
@@ -1469,35 +1553,10 @@ export default function App() {
     setTouchStartY(null);
   };
 
-  // If no user is logged in, show SQL Authentication Screen
+  // If no user is logged in, show Authentication Screen
   if (!currentUser) {
     return (
-      <>
-        <LoginScreen
-          onLoginSuccess={handleLoginSuccess}
-          onOpenSheetsModal={() => setIsSheetsModalOpen(true)}
-          cloudConnected={cloudConnected}
-        />
-        <GoogleSheetsSetupModal
-          isOpen={isSheetsModalOpen}
-          onClose={() => setIsSheetsModalOpen(false)}
-          onDataSynced={() => {
-            fetchAllData();
-            setCloudConnected(Boolean(getGoogleAppsScriptUrl()));
-          }}
-          currentAllData={{
-            stores,
-            users,
-            cogsMaster: cogsList,
-            thawingItems: items,
-            fabricationSegments: segments,
-            closingPlanRecords: closingRecords,
-            dailyClosingReports: reports,
-            stockAdjustments: adjustments,
-            lossConfig
-          }}
-        />
-      </>
+      <LoginScreen onLoginSuccess={handleLoginSuccess} />
     );
   }
 
@@ -1540,33 +1599,33 @@ export default function App() {
       label: userRole === 'butcher' ? 'Dashboard Bahan' : 'Input & Thawing',
       icon: LayoutDashboard,
       color: 'text-red-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'antrian',
       label: 'Antrian Thawing',
       icon: Clock,
       color: 'text-amber-500',
-      count: storeItems.filter((i) => i.status === 'thawing').length,
-      roles: ['butcher', 'admin'],
+      count: storeItems.filter((i) => !i.status || i.status.toLowerCase() === 'thawing' || i.status.toLowerCase() === 'sedang thawing' || i.status.toLowerCase() === 'antrian').length,
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'segmentasi',
       label: 'Segmentasi Potong',
       icon: Scissors,
       color: 'text-blue-500',
-      roles: ['butcher', 'admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'sales',
       label: 'Update Sales',
       icon: DollarSign,
       color: 'text-emerald-500',
-      roles: ['admin'],
+      roles: ['butcher', 'admin', 'md'],
     },
     {
       id: 'closing_butcher',
-      label: 'Closing Rencana Potong',
+      label: 'Menu Closing',
       icon: CheckSquare,
       color: 'text-rose-500',
       roles: ['butcher', 'admin', 'md'],
@@ -1655,6 +1714,7 @@ export default function App() {
                 onChange={(e) => setSelectedStoreIdForMd(e.target.value)}
                 className="w-full text-xs font-bold bg-slate-900 border border-slate-700 text-emerald-200 rounded-lg p-1.5 focus:ring-1 focus:ring-emerald-500 focus:outline-none cursor-pointer"
               >
+                <option value="all">🌟 Semua Cabang (Pusat & Seluruh Toko)</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.code} - {s.name}
@@ -1703,20 +1763,29 @@ export default function App() {
 
         {/* Bottom User Controls & Functional Logout Button */}
         <div className="p-3 border-t border-slate-800 space-y-2">
-          <button
-            onClick={() => setIsSheetsModalOpen(true)}
-            className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-between border cursor-pointer ${
-              cloudConnected
-                ? 'bg-emerald-950/60 hover:bg-emerald-900/80 border-emerald-800/80 text-emerald-300'
-                : 'bg-slate-800/80 hover:bg-slate-700 border-slate-700 text-slate-300'
-            }`}
-            title="Pengaturan Koneksi Google Spreadsheet Cloud"
+          <div
+            className="w-full py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-between border bg-slate-800/80 border-slate-700 text-slate-300"
+            title="Sistem Lokal Aktif"
           >
             <div className="flex items-center gap-2">
               <Database className="w-4 h-4 text-emerald-400" />
-              <span>Database Cloud</span>
+              <span>{backendConnected ? 'Sistem Aktif' : 'Penyimpanan Lokal'}</span>
             </div>
-            <span className={`w-2 h-2 rounded-full ${cloudConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            <span className={`w-2 h-2 rounded-full ${backendConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+          </div>
+
+          {/* Spreadsheet Database Integration Button */}
+          <button
+            type="button"
+            onClick={() => setShowAppsScriptModal(true)}
+            className="w-full mb-2.5 py-2.5 px-3 bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950 hover:from-emerald-900 hover:to-slate-800 border border-emerald-700/60 hover:border-emerald-400 text-emerald-300 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer shadow-sm active:scale-95"
+            title="Integrasi Database Spreadsheet AppScript"
+          >
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>Database Spreadsheet</span>
+            </div>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </button>
 
           <button
@@ -1756,17 +1825,23 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsSheetsModalOpen(true)}
-              className={`p-2 rounded-lg border text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                cloudConnected
-                  ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-800 text-emerald-300'
-                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
-              }`}
-              title="Status Database Cloud"
+              type="button"
+              onClick={() => setShowAppsScriptModal(true)}
+              className="p-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 bg-slate-800 border-emerald-600/40 text-emerald-300 hover:bg-slate-700 transition cursor-pointer"
+              title="Database Spreadsheet AppScript (Klik untuk buka pengaturan/status)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline text-[11px]">Spreadsheet</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            </button>
+
+            <div
+              className="p-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 bg-slate-800 border-slate-700 text-slate-300"
+              title={backendConnected ? 'Sistem Aktif' : 'Penyimpanan Lokal'}
             >
               <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span className={`w-1.5 h-1.5 rounded-full ${cloudConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-            </button>
+              <span className={`w-1.5 h-1.5 rounded-full ${backendConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            </div>
 
             <button
               onClick={handleLogout}
@@ -1843,6 +1918,7 @@ export default function App() {
                     onChange={(e) => setSelectedStoreIdForMd(e.target.value)}
                     className="w-full text-xs font-bold bg-slate-900 border border-slate-700 text-emerald-200 rounded-lg p-1.5 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                   >
+                    <option value="all">🌟 Semua Cabang (Pusat & Seluruh Toko)</option>
                     {stores.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.code} - {s.name}
@@ -1890,21 +1966,18 @@ export default function App() {
               {/* Drawer Functional Controls */}
               <div className="pt-4 border-t border-slate-800 space-y-2">
                 <button
+                  type="button"
                   onClick={() => {
-                    setIsSheetsModalOpen(true);
+                    setShowAppsScriptModal(true);
                     setIsMobileSidebarOpen(false);
                   }}
-                  className={`w-full py-2.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-between border cursor-pointer ${
-                    cloudConnected
-                      ? 'bg-emerald-950/60 hover:bg-emerald-900/80 border-emerald-800/80 text-emerald-300'
-                      : 'bg-slate-800/80 hover:bg-slate-700 border-slate-700 text-slate-300'
-                  }`}
+                  className="w-full py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-between border bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950 border-emerald-700/60 text-emerald-300 cursor-pointer transition"
                 >
                   <div className="flex items-center gap-2">
-                    <Database className="w-4 h-4 text-emerald-400" />
-                    <span>Database Cloud (Sheets)</span>
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                    <span>Database Spreadsheet</span>
                   </div>
-                  <span className={`w-2 h-2 rounded-full ${cloudConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 </button>
 
                 <button
@@ -1941,6 +2014,17 @@ export default function App() {
                 setIsEditPlanModalOpen(true);
               }}
               isButcherView={currentUser.role === 'butcher'}
+              grnRecords={grnRecords}
+              closingRecords={storeClosingRecords}
+              adjustments={storeAdjustments}
+              onSaveGrn={handleSaveGrn}
+              onSaveSales={handleUpdateSalesList}
+              onNavigateToClosing={(cat) => {
+                if (cat) setActiveReportCategory(cat);
+                setActiveTab('closing_butcher');
+              }}
+              initialCategory={activeReportCategory}
+              onCategoryChange={setActiveReportCategory}
             />
           )}
 
@@ -1952,6 +2036,8 @@ export default function App() {
               safeThawingLossPercent={lossConfig.safeThawingLossPercent}
               onTransferPurpose={handleTransferPurpose}
               onOpenTransferModal={() => setIsTransferModalOpen(true)}
+              onAddItem={handleAddItem}
+              onNavigateToSegmentasi={() => setActiveTab('segmentasi')}
             />
           )}
 
@@ -1969,6 +2055,7 @@ export default function App() {
                 setEditPlanItemId(id || null);
                 setIsEditPlanModalOpen(true);
               }}
+              onNavigateToClosing={() => setActiveTab('closing_butcher')}
             />
           )}
 
@@ -1987,8 +2074,13 @@ export default function App() {
               existingClosingRecords={storeClosingRecords}
               onDailyResetAndCarryover={handleDailyResetAndCarryover}
               onManualSync={() => fetchAllData(false)}
-              isSyncing={isCloudSyncing}
-              lastSyncTime={lastCloudSync}
+              isSyncing={isRefreshing}
+              lastSyncTime={null}
+              onNavigateToRiwayat={() => setActiveTab('riwayat')}
+              grnRecords={grnRecords}
+              onSaveGrn={handleSaveGrn}
+              activeReportCategory={activeReportCategory}
+              onCategoryChange={setActiveReportCategory}
             />
           )}
 
@@ -2030,6 +2122,7 @@ export default function App() {
               currentStore={currentStore}
               onCloseDay={handleSaveDailyReport}
               onDeleteReport={handleDeleteReport}
+              onNavigateToClosing={() => setActiveTab('closing_butcher')}
             />
           )}
 
@@ -2056,6 +2149,8 @@ export default function App() {
               onPurgeDate={handlePurgeDate}
               safeThawingLossPercent={lossConfig.safeThawingLossPercent}
               onUpdateSalesPrediction={handleUpdateSalesPrediction}
+              grnRecords={grnRecords}
+              onSaveGrn={handleSaveGrn}
             />
           )}
 
@@ -2074,6 +2169,7 @@ export default function App() {
               allSegments={segments}
               allAdjustments={adjustments}
               allClosingRecords={closingRecords}
+              allGrnRecords={grnRecords}
               onAddStore={handleAddStore}
               onUpdateCogs={handleUpdateCogs}
               onSelectStoreForDrilldown={(storeId) => {
@@ -2312,24 +2408,22 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 4: GOOGLE SPREADSHEET CLOUD SETUP (Multi-Device Sync) */}
-      <GoogleSheetsSetupModal
-        isOpen={isSheetsModalOpen}
-        onClose={() => setIsSheetsModalOpen(false)}
-        onDataSynced={() => {
-          fetchAllData();
-          setCloudConnected(Boolean(getGoogleAppsScriptUrl()));
-        }}
-        currentAllData={{
-          stores,
-          users,
-          cogsMaster: cogsList,
-          thawingItems: items,
-          fabricationSegments: segments,
-          closingPlanRecords: closingRecords,
-          dailyClosingReports: reports,
-          stockAdjustments: adjustments,
-          lossConfig
+      {/* 8. GOOGLE APPS SCRIPT SPREADSHEET DATABASE MODAL */}
+      <AppsScriptDatabaseModal
+        isOpen={showAppsScriptModal}
+        onClose={() => setShowAppsScriptModal(false)}
+        onRefreshAllData={fetchAllData}
+        counts={{
+          stores: stores.length,
+          users: users.length,
+          cogs: cogsList.length,
+          thawing: items.length,
+          segments: segments.length,
+          closing: closingRecords.length,
+          grn: grnRecords.length,
+          adjustments: adjustments.length,
+          reports: reports.length,
+          susut: 0,
         }}
       />
     </div>

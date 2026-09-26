@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ThawingItem, FabricationSegment } from '../types';
-import { Play, Plus, Trash2, CheckCircle2, Info, AlertTriangle, Scale, ArrowRightLeft, Edit3 } from 'lucide-react';
+import { Play, Plus, Trash2, CheckCircle2, Info, AlertTriangle, Scale, ArrowRightLeft, Edit3, ArrowRight } from 'lucide-react';
 
 interface SegmentasiPabrikasiProps {
   items: ThawingItem[];
@@ -21,6 +21,7 @@ interface SegmentasiPabrikasiProps {
   ) => void;
   onOpenTransferModal?: () => void;
   onOpenEditPlanModal?: (itemId?: string) => void;
+  onNavigateToClosing?: () => void;
 }
 
 interface TempSegment {
@@ -39,6 +40,7 @@ export default function SegmentasiPabrikasi({
   onTransferPurpose,
   onOpenTransferModal,
   onOpenEditPlanModal,
+  onNavigateToClosing,
 }: SegmentasiPabrikasiProps) {
   const readyItems = items.filter((i) => i.status === 'pabrikasi_ready');
 
@@ -262,13 +264,27 @@ export default function SegmentasiPabrikasi({
   return (
     <div className="space-y-6">
       {/* Title */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-          🔪 Segmentasi & Pemotongan Daging
-        </h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Bagi daging utuh (prime subprimal) menjadi bagian-bagian porsi retail (Steak, Slice, Fat Trim).
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div>
+          <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+            🔪 Segmentasi & Pemotongan Daging
+          </h1>
+          <p className="text-slate-500 text-xs md:text-sm mt-0.5">
+            Bagi daging utuh (prime subprimal) menjadi bagian-bagian porsi retail (Steak, Slice, Fat Trim).
+          </p>
+        </div>
+
+        {onNavigateToClosing && (
+          <button
+            type="button"
+            onClick={onNavigateToClosing}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer self-start sm:self-auto shrink-0"
+            title="Lanjut ke menu Closing Rencana Potong"
+          >
+            <span>Closing Rencana Potong</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* ALERT BANNER IF LIVE FABRICATION SHRINKAGE EXCEEDS 2% */}
@@ -673,10 +689,22 @@ export default function SegmentasiPabrikasi({
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Bahan Siap Potong ({readyItems.length})</h3>
 
             {readyItems.length === 0 ? (
-              <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl p-12 text-center">
-                <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
-                <p className="text-slate-600 font-bold">Semua daging telah dipabrikasi!</p>
-                <p className="text-slate-400 text-xs mt-1">Belum ada daging baru yang selesai dithawing dari antrian.</p>
+              <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl p-10 text-center space-y-3">
+                <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
+                <div>
+                  <p className="text-slate-800 font-bold">Semua daging telah dipabrikasi!</p>
+                  <p className="text-slate-500 text-xs mt-1">Daging hasil segmentasi telah masuk ke stok rencana potong dan siap dijual atau diclosing.</p>
+                </div>
+                {onNavigateToClosing && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToClosing}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                  >
+                    <span>Lanjut ke Closing Rencana Potong</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-4">

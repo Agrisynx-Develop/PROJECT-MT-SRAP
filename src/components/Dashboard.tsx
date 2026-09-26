@@ -1,5 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { ThawingItem, FabricationSegment, Store, SalesTrainingRecord, SalesPredictionModelConfig } from '../types';
+import {
+  ThawingItem,
+  FabricationSegment,
+  Store,
+  SalesTrainingRecord,
+  SalesPredictionModelConfig,
+  GrnRecord,
+  ClosingPlanRecord,
+  StockAdjustment,
+  ReportCategory,
+} from '../types';
+import NonMeatFlowInput from './NonMeatFlowInput';
 import { predictDailySales } from '../utils/mlPrediction';
 import { getSalesTrainingDataset, getSalesPredictionConfig, saveSalesPredictionConfig, getPythonModels } from '../utils/db';
 import { processHighResImage } from '../utils/imageCompressor';
@@ -61,18 +72,27 @@ interface DashboardProps {
   onOpenTransferModal?: () => void;
   onOpenEditPlanModal?: (itemId?: string) => void;
   isButcherView?: boolean;
+  grnRecords?: GrnRecord[];
+  closingRecords?: ClosingPlanRecord[];
+  adjustments?: StockAdjustment[];
+  onSaveGrn?: (records: GrnRecord[]) => void;
+  onSaveSales?: (itemsSales: { planName: string; salesKg: number }[]) => void;
+  onNavigateToClosing?: (category: ReportCategory) => void;
+  initialCategory?: ReportCategory;
+  onCategoryChange?: (category: ReportCategory) => void;
 }
 
 // Default template list matching user requested items
 const COMMON_MEATS = [
   { name: 'HQ 41/42/44/45', category: 'DAGING FRESH', plan: 'DAGING RENDANG PREMIUM', icon: '🥩' },
+  { name: 'FQ SHANK', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
+  { name: 'FQ 60 /SHANK', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
   { name: 'DG RNDG BEKU 1kg', category: 'DAGING FRESH', plan: 'RENDANG POT FRESH', icon: '🥩' },
   { name: 'DAGING KHUSUS', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
   { name: 'DG Prem 2', category: 'DAGING PREMIUM', plan: 'DAGING RENDANG PREMIUM', icon: '🍖' },
   { name: 'FRIBOY', category: 'DAGING PREMIUM', plan: 'DAGING RENDANG PREMIUM', icon: '🍖' },
   { name: 'FQ 106/105/18/16', category: 'RAWON FRESH', plan: 'RAWON', icon: '🥘' },
   { name: 'RAWON FRESH 2', category: 'RAWON FRESH', plan: 'RAWON', icon: '🥘' },
-  { name: 'FQ 60 /SHANK', category: 'DAGING FRESH', plan: 'RENDANG SHANKLE', icon: '🥩' },
 ];
 
 export default function Dashboard({
@@ -90,7 +110,29 @@ export default function Dashboard({
   onOpenTransferModal,
   onOpenEditPlanModal,
   isButcherView = false,
+  grnRecords = [],
+  closingRecords = [],
+  adjustments = [],
+  onSaveGrn,
+  onSaveSales,
+  onNavigateToClosing,
+  initialCategory = 'DAGING',
+  onCategoryChange,
 }: DashboardProps) {
+  // Category Selection State
+  const [selectedCategory, setSelectedCategory] = useState<ReportCategory>(initialCategory || 'DAGING');
+
+  useEffect(() => {
+    if (initialCategory) {
+      setSelectedCategory(initialCategory);
+    }
+  }, [initialCategory]);
+
+  const handleSelectCategory = (cat: ReportCategory) => {
+    setSelectedCategory(cat);
+    onCategoryChange?.(cat);
+  };
+
   // Real-time Clock State
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
 
@@ -261,6 +303,9 @@ export default function Dashboard({
   const applyTemplate = (meat: { name: string; category: string; plan: string }) => {
     setName(meat.name);
     setCategory(meat.category);
+    if (meat.plan) {
+      setPlan(meat.plan);
+    }
   };
 
   // Image upload handler with High-Resolution processing
@@ -298,21 +343,30 @@ export default function Dashboard({
       return;
     }
 
+    const resolvedPlan =
+      plan ||
+      (name.toUpperCase().includes('SHANK')
+        ? 'RENDANG SHANKLE'
+        : name.toUpperCase().includes('RAWON')
+        ? 'RAWON'
+        : 'DAGING RENDANG PREMIUM');
+
     onAddItem({
       name: name.trim(),
       pabrikasiCategory: category,
       weightBeforeThawing: weight,
       weightAfterThawing: weight,
       susutJualKg: 0,
-      plannedFabrication: 'PENDING',
+      plannedFabrication: resolvedPlan,
       openingPurpose: 'UNTUK DISPLAY',
-      image: 'placeholder',
+      image: image || 'placeholder',
     });
 
     // Reset Form
     setName('');
     setCategory('DAGING FRESH');
     setWeightBefore('');
+    setImage('');
     setErrorMsg('');
     setSuccessMsg('Bahan berhasil dimasukkan ke daftar Thawing!');
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -564,6 +618,79 @@ export default function Dashboard({
 
   return (
     <div className="space-y-6">
+      {/* Category Switcher Tabs */}
+      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+            Kategori Laporan & Alur Input:
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => handleSelectCategory('DAGING')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                selectedCategory === 'DAGING'
+                  ? 'bg-red-600 text-white shadow-sm ring-2 ring-red-300'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="text-base">🥩</span>
+              <span>Laporan Daging (Thawing & Potong)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectCategory('KENTANG_SOSIS_DORI')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                selectedCategory === 'KENTANG_SOSIS_DORI'
+                  ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-300'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="text-base">🌭🍟</span>
+              <span>Laporan Kentang, Sosis & Dori</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectCategory('PARTING_AYAM')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                selectedCategory === 'PARTING_AYAM'
+                  ? 'bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-300'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="text-base">🍗</span>
+              <span>Laporan Parting Ayam</span>
+            </button>
+          </div>
+        </div>
+
+        {selectedCategory !== 'DAGING' && (
+          <div className="flex items-center gap-2 text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
+            {selectedCategory === 'PARTING_AYAM' ? (
+              <span>⚡ Alur Parting: Input Display (Tally, Bruto, Netto & Foto) → Update Sales → Closing Fisik (Foto & Susut Jual)</span>
+            ) : (
+              <span>⚡ Alur Operasional: Input GRN → Update Sales → Closing Fisik</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {selectedCategory !== 'DAGING' ? (
+        <NonMeatFlowInput
+          category={selectedCategory}
+          currentStore={currentStore}
+          selectedDate={new Date().toISOString().split('T')[0]}
+          closingRecords={closingRecords}
+          grnRecords={grnRecords}
+          adjustments={adjustments}
+          onSaveGrn={(recs) => onSaveGrn && onSaveGrn(recs)}
+          onSaveSales={(salesList) => onSaveSales && onSaveSales(salesList)}
+          onNavigateToClosing={() => onNavigateToClosing && onNavigateToClosing(selectedCategory)}
+        />
+      ) : (
+        <>
       {/* Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950 rounded-3xl p-6 text-white shadow-xl border border-slate-800 relative overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-4 relative z-10">
@@ -2078,6 +2205,8 @@ export default function Dashboard({
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

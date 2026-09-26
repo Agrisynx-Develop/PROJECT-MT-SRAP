@@ -55,6 +55,7 @@ interface MdHelicopterViewProps {
   allSegments?: FabricationSegment[];
   allAdjustments?: StockAdjustment[];
   allClosingRecords?: ClosingPlanRecord[];
+  allGrnRecords?: import('../types').GrnRecord[];
   onAddStore: (store: Omit<Store, 'id' | 'createdAt'>, butcherName: string, adminName: string) => void;
   onUpdateCogs: (cogs: CogsMaster[]) => void;
   onSelectStoreForDrilldown?: (storeId: string) => void;
@@ -73,6 +74,7 @@ export default function MdHelicopterView({
   allSegments = [],
   allAdjustments = [],
   allClosingRecords = [],
+  allGrnRecords = [],
   onAddStore,
   onUpdateCogs,
   onSelectStoreForDrilldown,
@@ -470,6 +472,7 @@ export default function MdHelicopterView({
             allSegments={allSegments}
             allAdjustments={allAdjustments}
             allClosingRecords={allClosingRecords}
+            allGrnRecords={allGrnRecords}
             startDate={startDate}
             endDate={endDate}
             onDateChange={(s, e) => {

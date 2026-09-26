@@ -6,9 +6,12 @@ import {
   ThawingItem,
   FabricationSegment,
   ClosingPlanRecord,
-  StockAdjustment
+  StockAdjustment,
+  GrnRecord,
+  ReportCategory,
 } from '../types';
-import { exportRekapSusutMultiStoreExcel } from '../utils/excelExport';
+import NonMeatReportTable from './NonMeatReportTable';
+import { exportRekapSusutMultiStoreExcel, exportSosisKentangDoriExcel, exportPartingAyamExcel } from '../utils/excelExport';
 import {
   calculateCategoryAggregates,
   getCogsForCategory
@@ -50,6 +53,7 @@ interface MdExcelReportViewProps {
   allSegments?: FabricationSegment[];
   allAdjustments?: StockAdjustment[];
   allClosingRecords?: ClosingPlanRecord[];
+  allGrnRecords?: GrnRecord[];
   startDate: string;
   endDate: string;
   onDateChange?: (start: string, end: string) => void;
@@ -63,10 +67,16 @@ export default function MdExcelReportView({
   allSegments = [],
   allAdjustments = [],
   allClosingRecords = [],
+  allGrnRecords = [],
   startDate,
   endDate,
   onDateChange,
 }: MdExcelReportViewProps) {
+  const [mdCategory, setMdCategory] = useState<ReportCategory>('DAGING');
+  const [selectedStoreId, setSelectedStoreId] = useState<string>(stores[0]?.id || '1');
+  const [selectedNonMeatDate, setSelectedNonMeatDate] = useState<string>(
+    () => new Date().toISOString().split('T')[0]
+  );
   const [activeSheet, setActiveSheet] = useState<ExcelSheetTab>('REKAP');
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: string; val: string; formula?: string } | null>({
     row: 1,
@@ -298,7 +308,7 @@ export default function MdExcelReportView({
                 = BAHAN_RP / (SUM_NETTO - SUM_SUSUT_JUAL)
               </code>
               <br />
-              Harga modal pokok riil disesuaikan dengan mempertimbangkan total shrinkage dari proses pabrikasi hingga penjualan di toko.
+              Harga modal pokok riil disesuaikan dengan mempertimbangkan total shrinkage dari proses persiapan & pemotongan hingga penjualan di toko.
             </div>
           </div>
         </div>
@@ -570,6 +580,149 @@ export default function MdExcelReportView({
   };
 
   return (
+    <div className="space-y-4">
+      {/* MD Category Switcher Bar */}
+      <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
+            Pilih Kategori Laporan MD:
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setMdCategory('DAGING')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                mdCategory === 'DAGING'
+                  ? 'bg-red-600 text-white shadow-sm ring-2 ring-red-300'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="text-base">🥩</span>
+              <span>Laporan Daging (9 Sheet Rekap)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMdCategory('KENTANG_SOSIS_DORI')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                mdCategory === 'KENTANG_SOSIS_DORI'
+                  ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-300'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="text-base">🌭🍟</span>
+              <span>Laporan Kentang, Sosis & Dori</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMdCategory('PARTING_AYAM')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-2 ${
+                mdCategory === 'PARTING_AYAM'
+                  ? 'bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-300'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="text-base">🍗</span>
+              <span>Laporan Parting Ayam</span>
+            </button>
+          </div>
+        </div>
+
+        {mdCategory !== 'DAGING' && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Pilih Toko:</label>
+              <select
+                value={selectedStoreId}
+                onChange={(e) => setSelectedStoreId(e.target.value)}
+                className="text-xs font-bold px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800"
+              >
+                {stores.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Tanggal Laporan:</label>
+              <input
+                type="date"
+                value={selectedNonMeatDate}
+                onChange={(e) => setSelectedNonMeatDate(e.target.value)}
+                className="text-xs font-bold px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800"
+              />
+            </div>
+
+            <div className="self-end">
+              <button
+                type="button"
+                onClick={() => {
+                  const activeStore = stores.find((s) => s.id === selectedStoreId) || stores[0];
+                  if (activeStore) {
+                    if (mdCategory === 'KENTANG_SOSIS_DORI') {
+                      exportSosisKentangDoriExcel(
+                        activeStore,
+                        selectedNonMeatDate,
+                        allClosingRecords,
+                        allGrnRecords,
+                        allAdjustments
+                      );
+                    } else {
+                      exportPartingAyamExcel(
+                        activeStore,
+                        selectedNonMeatDate,
+                        allClosingRecords,
+                        allGrnRecords,
+                        allAdjustments
+                      );
+                    }
+                  }
+                }}
+                className="px-3.5 py-2 bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export XLSX</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {mdCategory !== 'DAGING' ? (
+        <NonMeatReportTable
+          category={mdCategory}
+          currentStore={stores.find((s) => s.id === selectedStoreId) || stores[0]}
+          selectedDate={selectedNonMeatDate}
+          closingRecords={allClosingRecords}
+          grnRecords={allGrnRecords}
+          adjustments={allAdjustments}
+          onExportExcel={() => {
+            const activeStore = stores.find((s) => s.id === selectedStoreId) || stores[0];
+            if (activeStore) {
+              if (mdCategory === 'KENTANG_SOSIS_DORI') {
+                exportSosisKentangDoriExcel(
+                  activeStore,
+                  selectedNonMeatDate,
+                  allClosingRecords,
+                  allGrnRecords,
+                  allAdjustments
+                );
+              } else {
+                exportPartingAyamExcel(
+                  activeStore,
+                  selectedNonMeatDate,
+                  allClosingRecords,
+                  allGrnRecords,
+                  allAdjustments
+                );
+              }
+            }
+          }}
+        />
+      ) : (
     <div
       className={`bg-slate-100 rounded-xl border border-slate-300 shadow-lg flex flex-col transition-all overflow-hidden ${
         isFullscreen ? 'fixed inset-2 z-50 bg-white' : 'w-full'
@@ -670,6 +823,8 @@ export default function MdExcelReportView({
           );
         })}
       </div>
+    </div>
+      )}
     </div>
   );
 }

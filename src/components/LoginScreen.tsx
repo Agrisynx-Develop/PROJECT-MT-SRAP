@@ -17,11 +17,13 @@ import {
 
 interface LoginScreenProps {
   onLoginSuccess: (user: UserAccount) => void;
-  onOpenSheetsModal?: () => void;
-  cloudConnected?: boolean;
+  databaseConnected?: boolean;
 }
 
-export default function LoginScreen({ onLoginSuccess, onOpenSheetsModal, cloudConnected }: LoginScreenProps) {
+export default function LoginScreen({
+  onLoginSuccess,
+  databaseConnected = true,
+}: LoginScreenProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -177,28 +179,18 @@ export default function LoginScreen({ onLoginSuccess, onOpenSheetsModal, cloudCo
           </form>
         </div>
 
-        {/* Cloud Connection Quick Control */}
-        {onOpenSheetsModal && (
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={onOpenSheetsModal}
-              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition border cursor-pointer ${
-                cloudConnected
-                  ? 'bg-emerald-950/60 hover:bg-emerald-900/80 border-emerald-800 text-emerald-300'
-                  : 'bg-slate-900/80 hover:bg-slate-800 border-slate-700 text-slate-300'
-              }`}
-            >
-              <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{cloudConnected ? 'Google Sheets Terhubung' : 'Hubungkan Google Sheets'}</span>
-              <span className={`w-2 h-2 rounded-full ${cloudConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-            </button>
+        {/* System Database Connection Indicator */}
+        <div className="flex flex-col items-center gap-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-950/60 border border-emerald-800 text-emerald-300">
+            <Database className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{databaseConnected ? 'Sistem Daging Aktif (Siap Digunakan)' : 'Mode Lokal'}</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </div>
-        )}
+        </div>
 
         {/* Footer info */}
         <div className="text-center text-[11px] text-slate-500 font-medium">
-          TDN Meat Production Tracker © 2026 • Real-Time Cloud Synchronization
+          TDN Meat Production Tracker © 2026 • Sistem Pabrikasi Daging Terintegrasi
         </div>
       </div>
     </div>
