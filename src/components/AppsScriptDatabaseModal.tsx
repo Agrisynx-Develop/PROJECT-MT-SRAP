@@ -40,20 +40,22 @@ interface AppsScriptDatabaseModalProps {
   };
 }
 
+const DEFAULT_APPSCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwYdrQaoe-083CyDAVoEv0AXXDIR6mEexvTmgyhahpGGHv7VC7jcRuxHUysiHUfs_Am/exec';
+
 export default function AppsScriptDatabaseModal({
   isOpen,
   onClose,
   onRefreshAllData,
   counts,
 }: AppsScriptDatabaseModalProps) {
-  const [appscriptUrl, setAppscriptUrl] = useState('');
-  const [isConfigured, setIsConfigured] = useState(false);
+  const [appscriptUrl, setAppscriptUrl] = useState(DEFAULT_APPSCRIPT_URL);
+  const [isConfigured, setIsConfigured] = useState(true);
   const [autoSync, setAutoSync] = useState(true);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isInitSheets, setIsInitSheets] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number; isAuthRequired?: boolean } | null>(null);
   const [showCode, setShowCode] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
@@ -71,8 +73,8 @@ export default function AppsScriptDatabaseModal({
       const res = await fetch('/api/appscript/config');
       if (res.ok) {
         const data = await res.json();
-        setAppscriptUrl(data.url || '');
-        setIsConfigured(Boolean(data.configured));
+        setAppscriptUrl(data.url || DEFAULT_APPSCRIPT_URL);
+        setIsConfigured(Boolean(data.configured || data.url));
         setAutoSync(data.autoSync !== false);
         setLastSyncTime(data.lastSync || null);
       }
@@ -81,6 +83,9 @@ export default function AppsScriptDatabaseModal({
       const saved = localStorage.getItem('appscript_web_app_url');
       if (saved) {
         setAppscriptUrl(saved);
+        setIsConfigured(true);
+      } else {
+        setAppscriptUrl(DEFAULT_APPSCRIPT_URL);
         setIsConfigured(true);
       }
     }
@@ -149,6 +154,7 @@ export default function AppsScriptDatabaseModal({
           success: false,
           message: err.error || 'Gagal menghubungi Web App. Pastikan akses diatur ke "Anyone" (Siapa saja).',
           latency,
+          isAuthRequired: Boolean(err.isAuthRequired),
         });
       }
     } catch (e: any) {
@@ -422,6 +428,18 @@ export default function AppsScriptDatabaseModal({
                     <span className="ml-2 text-[10px] text-slate-500">
                       (Waktu respon: {testResult.latency} ms)
                     </span>
+                  )}
+                  {testResult.isAuthRequired && (
+                    <div className="mt-2.5 p-2.5 bg-amber-100/80 rounded-lg border border-amber-300 text-amber-900 text-[11px] leading-relaxed">
+                      <strong>Cara 1 Menit Mengubah Izin Akses di Google Apps Script:</strong>
+                      <ol className="list-decimal list-inside mt-1 space-y-0.5">
+                        <li>Buka Google Spreadsheet &rarr; Ekstensi &rarr; Apps Script</li>
+                        <li>Klik tombol biru <strong>Terapkan (Deploy)</strong> di kanan atas &rarr; <strong>Kelola penerapan (Manage deployments)</strong></li>
+                        <li>Klik <strong>ikon pensil (Edit)</strong> di pojok kanan atas pop-up penerapan</li>
+                        <li>Pada bagian <em>"Siapa yang memiliki akses" (Who has access)</em>, ubah dari "Hanya saya" menjadi <strong>"Siapa saja" (Anyone)</strong></li>
+                        <li>Klik <strong>Terapkan (Deploy)</strong>, lalu klik <strong>Test Koneksi</strong> kembali di sini!</li>
+                      </ol>
+                    </div>
                   )}
                 </div>
               </div>
