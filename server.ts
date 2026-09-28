@@ -147,6 +147,7 @@ function persistStoreToDisk() {
 
 // ----------------- GOOGLE APPS SCRIPT SPREADSHEET DATABASE SYNC ENGINE -----------------
 const APPSCRIPT_CONFIG_FILE = path.join(DATA_DIR, 'appscript_config.json');
+const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwYdrQaoe-083CyDAVoEv0AXXDIR6mEexvTmgyhahpGGHv7VC7jcRuxHUysiHUfs_Am/exec';
 
 interface AppsScriptConfig {
   url: string;
@@ -155,7 +156,7 @@ interface AppsScriptConfig {
 }
 
 let appsScriptConfig: AppsScriptConfig = {
-  url: process.env.APPS_SCRIPT_URL || '',
+  url: process.env.APPS_SCRIPT_URL || DEFAULT_APPS_SCRIPT_URL,
   autoSync: true,
   lastSync: null,
 };
@@ -166,11 +167,14 @@ function loadAppsScriptConfig() {
       const data = JSON.parse(fs.readFileSync(APPSCRIPT_CONFIG_FILE, 'utf-8'));
       if (data && typeof data === 'object') {
         appsScriptConfig = {
-          url: data.url || process.env.APPS_SCRIPT_URL || '',
+          url: data.url || process.env.APPS_SCRIPT_URL || DEFAULT_APPS_SCRIPT_URL,
           autoSync: data.autoSync !== false,
           lastSync: data.lastSync || null,
         };
       }
+    } else {
+      appsScriptConfig.url = DEFAULT_APPS_SCRIPT_URL;
+      saveAppsScriptConfig({ url: DEFAULT_APPS_SCRIPT_URL });
     }
   } catch (e) {
     console.error('[AppsScript] Failed to load config:', e);
@@ -198,14 +202,19 @@ async function sendToAppsScript(payload: any, customUrl?: string): Promise<any> 
       body: JSON.stringify(payload),
       redirect: 'follow',
     });
-    if (res.ok) {
-      const data = await res.json();
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(text);
       appsScriptConfig.lastSync = new Date().toISOString();
       saveAppsScriptConfig({});
       return data;
-    } else {
-      const text = await res.text();
-      console.warn('[AppsScript] Server responded with error:', res.status, text.substring(0, 200));
+    } catch {
+      if (text.includes('accounts.google.com') || text.includes('ServiceLogin') || text.includes('<html')) {
+        console.warn('[AppsScript] Deployment requires "Anyone" permission. Currently redirecting to Google Login.');
+      } else {
+        console.warn('[AppsScript] Response was not JSON:', text.substring(0, 100));
+      }
       return null;
     }
   } catch (err: any) {
@@ -602,14 +611,25 @@ async function startServer() {
       const response = await fetch(pingUrl, { method: 'GET', redirect: 'follow' });
       const latency = Date.now() - startTime;
 
-      if (!response.ok) {
+      const rawText = await response.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        if (rawText.includes('accounts.google.com') || rawText.includes('ServiceLogin') || rawText.includes('<html')) {
+          saveAppsScriptConfig({ url: targetUrl });
+          return res.status(403).json({
+            error: '⚠️ Izin Web App Google Apps Script masih dibatasi ("Only myself"). Mohon buka Apps Script -> Klik tombol biru Deploy (Terapkan) -> Manage deployments (Kelola penerapan) -> Edit (ikon pensil) -> Ubah "Who has access (Siapa yang memiliki akses)" menjadi "Anyone (Siapa saja)" -> Klik Deploy.',
+            isAuthRequired: true,
+            latency
+          });
+        }
         return res.status(502).json({
-          error: `Google Spreadsheet Web App merespon status ${response.status}: ${response.statusText}`,
+          error: `Respon Web App tidak valid: ${rawText.substring(0, 150)}`,
           latency
         });
       }
 
-      const data = await response.json();
       saveAppsScriptConfig({ url: targetUrl });
       res.json({
         success: true,
